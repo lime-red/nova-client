@@ -1,0 +1,28 @@
+[hub]
+url = "http://localhost:8000"
+client_id = ""
+client_secret = ""
+
+[bbs]
+name = "My BBS"
+
+[sync]
+sent_action = "archive"
+archive_dir = "./sent"
+max_retries = 3
+retry_delay = 5
+metrics_file = "./metrics.json"
+
+# Define your leagues here
+# BBS ID is assigned per league and should match what's configured in the hub admin interface
+[leagues.BRE.555]
+enabled = true
+bbs_index = 2  # Your BBS ID for this league (integer 1-255)
+outbound_dir = "./test_data/bre_555/outbound"
+inbound_dir = "./test_data/bre_555/inbound"
+
+[leagues.FE.123]
+enabled = true
+bbs_index = 3  # Different BBS ID for different league
+outbound_dir = "./test_data/fe_123/outbound"
+inbound_dir = "./test_data/fe_123/inbound"
