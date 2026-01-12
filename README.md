@@ -28,15 +28,11 @@ pip install -r requirements.txt
    - BBS information
    - League directories
 
-3. Create .env file (optional):
-   ```bash
-   HUB_CLIENT_ID=your_client_id
-   HUB_CLIENT_SECRET=your_secret
-   ```
 
 ## Usage
 
 ### One-time Run
+Default config file is `config.toml`, or specify `--config <specific TOML file>.  One copy of the client can service many copies of BRE and FE, by having many config TOML files.
 ```bash
 python client.py
 ```
@@ -61,7 +57,7 @@ python client.py
 # Check if packets received
 if [ -n "$(ls -A /path/to/inbound 2>/dev/null)" ]; then
     # Process with your game
-    dosemu -dumb -E "BRE.EXE PLANET"
+    dosemu -E "BRE.EXE PLANETARY"
 fi
 ```
 

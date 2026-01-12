@@ -188,28 +188,35 @@ class NovaHubClient:
     async def upload_packet(
         self, game_type: str, league_number: str, packet_file: Path
     ) -> bool:
-        """Upload a single packet to the hub"""
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_number}/packets"
+        """Upload a single packet to the hub using PUT with raw body"""
 
-        headers = {"Authorization": f"Bearer {self.token}"}
+        # Convert game_type to single letter (BRE -> B, FE -> F)
+        game_type_letter = "B" if game_type == "BRE" else "F"
+
+        # Construct league_id with game type (e.g., "555B" or "555F")
+        league_id = f"{league_number}{game_type_letter}"
+        filename = packet_file.name
+
+        # New URL structure with filename in path
+        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets/{filename}"
+
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/octet-stream"
+        }
 
         max_retries = self.config.get("sync", {}).get("max_retries", 3)
         retry_delay = self.config.get("sync", {}).get("retry_delay", 5)
 
+        # Read file as raw bytes
+        file_data = packet_file.read_bytes()
+
         for attempt in range(max_retries):
             try:
-                # Create form data with file
-                data = aiohttp.FormData()
-                data.add_field(
-                    "file",
-                    packet_file.open("rb"),
-                    filename=packet_file.name,
-                    content_type="application/octet-stream",
-                )
-
-                async with self.session.post(url, headers=headers, data=data) as resp:
+                # PUT request with raw body
+                async with self.session.put(url, headers=headers, data=file_data) as resp:
                     if resp.status == 200:
-                        self.log("INFO", f"Uploaded: {packet_file.name}", league_number)
+                        self.log("INFO", f"Uploaded: {filename}", league_number)
                         return True
                     elif resp.status == 401:
                         self.log("ERROR", "Token rejected by server", league_number)
@@ -239,7 +246,7 @@ class NovaHubClient:
     ) -> int:
         """Download inbound packets from hub"""
         # Step 1: List available packets
-        packets = await self.list_packets(league_number, unread=True)
+        packets = await self.list_packets(game_type, league_number, unread=True)
 
         if not packets:
             self.log("DEBUG", "No inbound packets", league_number)
@@ -254,7 +261,7 @@ class NovaHubClient:
         downloaded = 0
         for packet_info in packets:
             filename = packet_info["filename"]
-            success = await self.download_packet(league_number, filename, inbound_dir)
+            success = await self.download_packet(game_type, league_number, filename, inbound_dir)
             if success:
                 downloaded += 1
             else:
@@ -264,10 +271,16 @@ class NovaHubClient:
         return downloaded
 
     async def list_packets(
-        self, league_number: str, unread: bool = False
+        self, game_type: str, league_number: str, unread: bool = False
     ) -> List[dict]:
         """List packets available at the hub"""
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_number}/packets"
+        # Convert game_type to single letter (BRE -> B, FE -> F)
+        game_type_letter = "B" if game_type == "BRE" else "F"
+
+        # Construct league_id with game type (e.g., "555B" or "555F")
+        league_id = f"{league_number}{game_type_letter}"
+
+        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets"
 
         if unread:
             url += "?unread=true"
@@ -291,10 +304,16 @@ class NovaHubClient:
             return []
 
     async def download_packet(
-        self, league_number: str, filename: str, inbound_dir: Path
+        self, game_type: str, league_number: str, filename: str, inbound_dir: Path
     ) -> bool:
         """Download a single packet from the hub"""
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_number}/packets/{filename}"
+        # Convert game_type to single letter (BRE -> B, FE -> F)
+        game_type_letter = "B" if game_type == "BRE" else "F"
+
+        # Construct league_id with game type (e.g., "555B" or "555F")
+        league_id = f"{league_number}{game_type_letter}"
+
+        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets/{filename}"
 
         headers = {"Authorization": f"Bearer {self.token}"}
 
