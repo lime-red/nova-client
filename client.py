@@ -445,9 +445,24 @@ def main():
         help="Path to configuration file (default: config.toml)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate configuration without syncing packets"
+    )
 
     args = parser.parse_args()
 
+    # Handle validation mode
+    if args.validate:
+        from validator import ClientValidator
+
+        validator = ClientValidator(args.config)
+        success = validator.validate()
+        validator.print_results()
+        sys.exit(0 if success else 1)
+
+    # Normal operation mode
     try:
         client = NovaHubClient(args.config)
         exit_code = asyncio.run(client.run())
