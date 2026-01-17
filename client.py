@@ -84,6 +84,42 @@ class NovaHubClient:
                 {"time": timestamp, "message": message, "league": league}
             )
 
+    def sanitize_filename(self, filename: str) -> str:
+        """
+        Sanitize and validate a packet filename to prevent path traversal attacks.
+
+        Args:
+            filename: The filename to sanitize
+
+        Returns:
+            The sanitized filename (basename only)
+
+        Raises:
+            ValueError: If the filename is invalid or contains traversal attempts
+        """
+        if not filename:
+            raise ValueError("Empty filename")
+
+        # Strip any path components - defense against path traversal
+        safe_name = os.path.basename(filename)
+
+        # Check if path traversal was attempted
+        if safe_name != filename:
+            raise ValueError(f"Path traversal attempt detected in filename: {filename}")
+
+        # Reject obviously dangerous names
+        if safe_name in (".", "..", ""):
+            raise ValueError(f"Invalid filename: {filename}")
+
+        # Validate against expected packet filename pattern
+        # Pattern: <league><game><source><dest>.<seq>
+        # Example: 555B0102.001
+        packet_pattern = r"^[0-9]{3}[BF][0-9A-Fa-f]{4}\.[0-9]{3}$"
+        if not re.match(packet_pattern, safe_name):
+            raise ValueError(f"Filename does not match expected packet format: {filename}")
+
+        return safe_name
+
     async def run(self):
         """Execute one complete sync run"""
         self.log("INFO", "Nova Hub Client starting")
@@ -189,15 +225,20 @@ class NovaHubClient:
         self, game_type: str, league_number: str, packet_file: Path
     ) -> bool:
         """Upload a single packet to the hub using PUT with raw body"""
+        # Defense-in-depth: validate filename before using in URL
+        try:
+            filename = self.sanitize_filename(packet_file.name)
+        except ValueError as e:
+            self.log("ERROR", f"Invalid filename for upload: {e}", league_number)
+            return False
 
         # Convert game_type to single letter (BRE -> B, FE -> F)
         game_type_letter = "B" if game_type == "BRE" else "F"
 
         # Construct league_id with game type (e.g., "555B" or "555F")
         league_id = f"{league_number}{game_type_letter}"
-        filename = packet_file.name
 
-        # New URL structure with filename in path
+        # URL with validated filename
         url = f"{self.config['hub']['url']}/service/api/v1/leagues/{league_id}/packets/{filename}"
 
         headers = {
@@ -260,7 +301,16 @@ class NovaHubClient:
         # Step 2: Download each packet
         downloaded = 0
         for packet_info in packets:
-            filename = packet_info["filename"]
+            raw_filename = packet_info["filename"]
+
+            # Sanitize filename from server to prevent path traversal
+            try:
+                filename = self.sanitize_filename(raw_filename)
+            except ValueError as e:
+                self.log("ERROR", f"Invalid filename from server: {e}", league_number)
+                self.metrics["leagues"][f"{game_type}_{league_number}"]["errors"] += 1
+                continue
+
             success = await self.download_packet(game_type, league_number, filename, inbound_dir)
             if success:
                 downloaded += 1
@@ -307,6 +357,13 @@ class NovaHubClient:
         self, game_type: str, league_number: str, filename: str, inbound_dir: Path
     ) -> bool:
         """Download a single packet from the hub"""
+        # Defense-in-depth: validate filename even though caller should sanitize
+        try:
+            filename = self.sanitize_filename(filename)
+        except ValueError as e:
+            self.log("ERROR", f"Invalid filename in download_packet: {e}", league_number)
+            return False
+
         # Convert game_type to single letter (BRE -> B, FE -> F)
         game_type_letter = "B" if game_type == "BRE" else "F"
 
@@ -361,9 +418,16 @@ class NovaHubClient:
             archive_dir = Path(self.config.get("sync", {}).get("archive_dir", "./sent"))
             archive_dir.mkdir(parents=True, exist_ok=True)
 
-            dest = archive_dir / packet_file.name
+            # Defense-in-depth: validate filename before constructing archive path
+            try:
+                safe_name = self.sanitize_filename(packet_file.name)
+            except ValueError as e:
+                self.log("ERROR", f"Invalid filename for archive: {e}")
+                return
+
+            dest = archive_dir / safe_name
             packet_file.rename(dest)
-            self.log("DEBUG", f"Archived: {packet_file.name}")
+            self.log("DEBUG", f"Archived: {safe_name}")
 
     def is_packet_file(
         self, filename: str, game_type: str, league_number: str, league_config: dict
