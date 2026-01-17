@@ -224,12 +224,27 @@ class NovaHubClient:
     async def upload_packet(
         self, game_type: str, league_number: str, packet_file: Path
     ) -> bool:
-        """Upload a single packet to the hub using PUT with raw body"""
+        """Upload a single packet to the hub using PUT with streaming body"""
         # Defense-in-depth: validate filename before using in URL
         try:
             filename = self.sanitize_filename(packet_file.name)
         except ValueError as e:
             self.log("ERROR", f"Invalid filename for upload: {e}", league_number)
+            return False
+
+        # Max file size limit (10MB)
+        MAX_SIZE = 10 * 1024 * 1024
+        try:
+            file_size = packet_file.stat().st_size
+            if file_size > MAX_SIZE:
+                self.log(
+                    "ERROR",
+                    f"File too large for upload: {filename} ({file_size} bytes)",
+                    league_number,
+                )
+                return False
+        except OSError as e:
+            self.log("ERROR", f"Could not stat file: {e}", league_number)
             return False
 
         # Convert game_type to single letter (BRE -> B, FE -> F)
@@ -249,27 +264,26 @@ class NovaHubClient:
         max_retries = self.config.get("sync", {}).get("max_retries", 3)
         retry_delay = self.config.get("sync", {}).get("retry_delay", 5)
 
-        # Read file as raw bytes
-        file_data = packet_file.read_bytes()
-
         for attempt in range(max_retries):
             try:
-                # PUT request with raw body
-                async with self.session.put(url, headers=headers, data=file_data) as resp:
-                    if resp.status == 200:
-                        self.log("INFO", f"Uploaded: {filename}", league_number)
-                        return True
-                    elif resp.status == 401:
-                        self.log("ERROR", "Token rejected by server", league_number)
-                        return False
-                    else:
-                        error = await resp.text()
-                        self.log(
-                            "ERROR",
-                            f"Upload failed ({resp.status}): {error}",
-                            league_number,
-                        )
-                        return False
+                # Open file in binary mode for streaming
+                with open(packet_file, "rb") as f:
+                    # PUT request with streaming body
+                    async with self.session.put(url, headers=headers, data=f) as resp:
+                        if resp.status == 200:
+                            self.log("INFO", f"Uploaded: {filename}", league_number)
+                            return True
+                        elif resp.status == 401:
+                            self.log("ERROR", "Token rejected by server", league_number)
+                            return False
+                        else:
+                            error = await resp.text()
+                            self.log(
+                                "ERROR",
+                                f"Upload failed ({resp.status}): {error}",
+                                league_number,
+                            )
+                            return False
 
             except Exception as e:
                 self.log(
