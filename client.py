@@ -198,7 +198,7 @@ class NovaHubClient:
         filename = packet_file.name
 
         # New URL structure with filename in path
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets/{filename}"
+        url = f"{self.config['hub']['url']}/service/api/v1/leagues/{league_id}/packets/{filename}"
 
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -280,7 +280,7 @@ class NovaHubClient:
         # Construct league_id with game type (e.g., "555B" or "555F")
         league_id = f"{league_number}{game_type_letter}"
 
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets"
+        url = f"{self.config['hub']['url']}/service/api/v1/leagues/{league_id}/packets"
 
         if unread:
             url += "?unread=true"
@@ -313,7 +313,7 @@ class NovaHubClient:
         # Construct league_id with game type (e.g., "555B" or "555F")
         league_id = f"{league_number}{game_type_letter}"
 
-        url = f"{self.config['hub']['url']}/api/v1/leagues/{league_id}/packets/{filename}"
+        url = f"{self.config['hub']['url']}/service/api/v1/leagues/{league_id}/packets/{filename}"
 
         headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -388,7 +388,7 @@ class NovaHubClient:
 
     async def get_token(self) -> Optional[str]:
         """Get OAuth token from the hub"""
-        url = f"{self.config['hub']['url']}/auth/token"
+        url = f"{self.config['hub']['url']}/service/api/v1/auth/token"
 
         data = {
             "grant_type": "client_credentials",
