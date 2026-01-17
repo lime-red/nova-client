@@ -1,0 +1,37 @@
+#!/bin/bash
+# sync_and_process.sh.example - Template for BBS operator script
+# Copy this file to sync_and_process.sh and adjust paths for your environment.
+
+# Fail on any error
+set -e
+
+# Configuration - ADJUST THESE PATHS
+LEAGUE="555"
+CLIENT_DIR="/opt/nova-hub-client"
+BRE_DIR="/opt/bre"
+INBOUND_DIR="${BRE_DIR}/league${LEAGUE}/inbound"
+PYTHON_BIN="${CLIENT_DIR}/venv/bin/python"
+
+echo "=== Nova Hub Sync ==="
+
+# Run the client
+cd "${CLIENT_DIR}"
+"${PYTHON_BIN}" client.py --config config.toml
+
+# Check if we received any packets
+# We check if there are any files in the inbound directory
+# Use find to be safe with spaces and avoid ls issues
+if [ -d "${INBOUND_DIR}" ] && [ -n "$(find "${INBOUND_DIR}" -maxdepth 1 -type f -print -quit)" ]; then
+    echo "Processing received packets in ${INBOUND_DIR}..."
+
+    # Run BRE in Dosemu to process inbound packets
+    cd "${BRE_DIR}"
+    # Note: dosemu may need specific configuration for your environment
+    dosemu -f dosemu.conf "BRE.EXE PLANETARY"
+
+    echo "Processing complete"
+else
+    echo "No packets received in ${INBOUND_DIR}"
+fi
+
+echo "=== Sync Complete ==="
