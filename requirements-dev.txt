@@ -1,0 +1,13 @@
+# Development/test dependencies for nova_client
+# Install with: pip install -r requirements-dev.txt
+
+# Testing framework
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# Mock server dependencies
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
+
+# Note: aiohttp, python-dotenv, and toml are in requirements.txt

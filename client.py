@@ -23,7 +23,8 @@ load_dotenv()
 class NovaHubClient:
     """One-shot client for syncing packets with Nova Hub"""
 
-    def __init__(self, config_path: str = "config.toml"):
+    def __init__(self, config_path: str = "config.toml", verbose: bool = False):
+        self.verbose = verbose
         self.config = self.load_config(config_path)
         self.metrics = {
             "start_time": datetime.now().isoformat(),
@@ -83,6 +84,23 @@ class NovaHubClient:
             self.metrics["errors"].append(
                 {"time": timestamp, "message": message, "league": league}
             )
+            if not self.verbose:
+                print("  (use --verbose to see more details)")
+
+    def log_api_response(self, response_text: str, context: str = ""):
+        """Log API response in verbose mode with pretty-printing"""
+        if not self.verbose:
+            return
+
+        prefix = f"[API Response{': ' + context if context else ''}]"
+        try:
+            # Try to parse as JSON and pretty-print
+            data = json.loads(response_text)
+            print(f"{prefix}")
+            print(json.dumps(data, indent=2))
+        except (json.JSONDecodeError, TypeError):
+            # Not JSON, print as-is
+            print(f"{prefix} {response_text}")
 
     def sanitize_filename(self, filename: str) -> str:
         """
@@ -111,12 +129,18 @@ class NovaHubClient:
         if safe_name in (".", "..", ""):
             raise ValueError(f"Invalid filename: {filename}")
 
-        # Validate against expected packet filename pattern
-        # Pattern: <league><game><source><dest>.<seq>
+        # Validate against expected filename patterns
+        # Packet pattern: <league><game><source><dest>.<seq>
         # Example: 555B0102.001
         packet_pattern = r"^[0-9]{3}[BF][0-9A-Fa-f]{4}\.[0-9]{3}$"
-        if not re.match(packet_pattern, safe_name):
-            raise ValueError(f"Filename does not match expected packet format: {filename}")
+
+        # Nodelist pattern: BRNODES.<league> or FENODES.<league>
+        # Example: BRNODES.555, FENODES.013
+        nodelist_pattern = r"^(BR|FE)NODES\.[0-9]{3}$"
+
+        if not (re.match(packet_pattern, safe_name, re.IGNORECASE) or
+                re.match(nodelist_pattern, safe_name, re.IGNORECASE)):
+            raise ValueError(f"Filename does not match expected format: {filename}")
 
         return safe_name
 
@@ -224,12 +248,27 @@ class NovaHubClient:
     async def upload_packet(
         self, game_type: str, league_number: str, packet_file: Path
     ) -> bool:
-        """Upload a single packet to the hub using PUT with raw body"""
+        """Upload a single packet to the hub using PUT with streaming body"""
         # Defense-in-depth: validate filename before using in URL
         try:
             filename = self.sanitize_filename(packet_file.name)
         except ValueError as e:
             self.log("ERROR", f"Invalid filename for upload: {e}", league_number)
+            return False
+
+        # Max file size limit (10MB)
+        MAX_SIZE = 10 * 1024 * 1024
+        try:
+            file_size = packet_file.stat().st_size
+            if file_size > MAX_SIZE:
+                self.log(
+                    "ERROR",
+                    f"File too large for upload: {filename} ({file_size} bytes)",
+                    league_number,
+                )
+                return False
+        except OSError as e:
+            self.log("ERROR", f"Could not stat file: {e}", league_number)
             return False
 
         # Convert game_type to single letter (BRE -> B, FE -> F)
@@ -249,27 +288,29 @@ class NovaHubClient:
         max_retries = self.config.get("sync", {}).get("max_retries", 3)
         retry_delay = self.config.get("sync", {}).get("retry_delay", 5)
 
-        # Read file as raw bytes
-        file_data = packet_file.read_bytes()
-
         for attempt in range(max_retries):
             try:
-                # PUT request with raw body
-                async with self.session.put(url, headers=headers, data=file_data) as resp:
-                    if resp.status == 200:
-                        self.log("INFO", f"Uploaded: {filename}", league_number)
-                        return True
-                    elif resp.status == 401:
-                        self.log("ERROR", "Token rejected by server", league_number)
-                        return False
-                    else:
-                        error = await resp.text()
-                        self.log(
-                            "ERROR",
-                            f"Upload failed ({resp.status}): {error}",
-                            league_number,
-                        )
-                        return False
+                # Open file in binary mode for streaming
+                with open(packet_file, "rb") as f:
+                    # PUT request with streaming body
+                    async with self.session.put(url, headers=headers, data=f) as resp:
+                        if resp.status == 200:
+                            self.log("INFO", f"Uploaded: {filename}", league_number)
+                            return True
+                        elif resp.status == 401:
+                            error = await resp.text()
+                            self.log("ERROR", "Token rejected by server", league_number)
+                            self.log_api_response(error, "upload auth error")
+                            return False
+                        else:
+                            error = await resp.text()
+                            self.log(
+                                "ERROR",
+                                f"Upload failed ({resp.status})",
+                                league_number,
+                            )
+                            self.log_api_response(error, "upload error")
+                            return False
 
             except Exception as e:
                 self.log(
@@ -341,13 +382,17 @@ class NovaHubClient:
             async with self.session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    self.log_api_response(json.dumps(data), "list packets")
                     return data.get("packets", [])
                 elif resp.status == 401:
+                    error = await resp.text()
                     self.log("ERROR", "Token rejected when listing packets")
+                    self.log_api_response(error, "list packets auth error")
                     return []
                 else:
                     error = await resp.text()
-                    self.log("ERROR", f"List packets failed ({resp.status}): {error}")
+                    self.log("ERROR", f"List packets failed ({resp.status})")
+                    self.log_api_response(error, "list packets error")
                     return []
         except Exception as e:
             self.log("ERROR", f"List packets exception: {e}")
@@ -392,11 +437,14 @@ class NovaHubClient:
                         )
                         return True
                     elif resp.status == 401:
+                        error = await resp.text()
                         self.log("ERROR", "Token rejected when downloading packet")
+                        self.log_api_response(error, "download auth error")
                         return False
                     else:
                         error = await resp.text()
-                        self.log("ERROR", f"Download failed ({resp.status}): {error}")
+                        self.log("ERROR", f"Download failed ({resp.status})")
+                        self.log_api_response(error, "download error")
                         return False
 
             except Exception as e:
@@ -465,10 +513,15 @@ class NovaHubClient:
                 if resp.status == 200:
                     token_data = await resp.json()
                     self.log("INFO", "OAuth token obtained")
+                    # Log token response (but mask the actual token for security)
+                    if self.verbose:
+                        masked = {**token_data, "access_token": "***masked***"}
+                        self.log_api_response(json.dumps(masked), "token")
                     return token_data["access_token"]
                 else:
                     error = await resp.text()
-                    self.log("ERROR", f"Token request failed ({resp.status}): {error}")
+                    self.log("ERROR", f"Token request failed ({resp.status})")
+                    self.log_api_response(error, "token error")
                     return None
 
         except Exception as e:
@@ -528,7 +581,7 @@ def main():
 
     # Normal operation mode
     try:
-        client = NovaHubClient(args.config)
+        client = NovaHubClient(args.config, verbose=args.verbose)
         exit_code = asyncio.run(client.run())
         sys.exit(exit_code)
 

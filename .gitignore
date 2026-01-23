@@ -9,7 +9,6 @@ data/
 .pytest_cache/
 .DS_Store
 config.toml
-labs.sh
 *.ipynb
 
 inbound/
