@@ -13,16 +13,48 @@ max_retries = 3
 retry_delay = 5
 metrics_file = "./metrics.json"
 
+# Daemon mode configuration (for daemon.py)
+# These settings are only used when running in daemon mode
+[daemon]
+enabled = true
+sync_interval = 120               # seconds between Nova Hub sync polls
+maintenance_interval = 600        # seconds between scheduled game maintenance runs
+maintenance_timeout = 300         # max seconds to wait for game maintenance to complete
+run_maintenance_on_download = true # run maintenance immediately when packets arrive
+
+# Linux-only: dosemu configuration
+dosemu_path = "/usr/bin/dosemu"
+dosemu_config_dir = "./dosemu_configs"
+log_dir = "./logs"
+
 # Define your leagues here
 # BBS ID is assigned per league and should match what's configured in the hub admin interface
+
+# Example BRE league configuration
 [leagues.BRE.555]
 enabled = true
 bbs_index = 2  # Your BBS ID for this league (integer 1-255)
 outbound_dir = "./test_data/bre_555/outbound"
 inbound_dir = "./test_data/bre_555/inbound"
 
+# Game execution settings (required for daemon mode)
+game_folder = "C:\\BBS\\BRE"              # Windows path to game folder
+# game_folder = "/home/user/.dosemu/drive_c/BBS/BRE"  # Linux path alternative
+game_command = "BRE"                       # Executable name (without path)
+maintenance_args = "PLANETARY"             # Arguments for maintenance command
+
+# Linux-only: DOS path mapping (for dosemu)
+game_dos_path = "C:\\BBS\\BRE"             # DOS path as seen inside dosemu
+
+# Example Falcon's Eye league configuration
 [leagues.FE.123]
 enabled = true
 bbs_index = 3  # Different BBS ID for different league
 outbound_dir = "./test_data/fe_123/outbound"
 inbound_dir = "./test_data/fe_123/inbound"
+
+# Game execution settings (required for daemon mode)
+game_folder = "C:\\BBS\\FE"
+game_command = "FE"
+maintenance_args = "PLANETARY"
+game_dos_path = "C:\\BBS\\FE"
