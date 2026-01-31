@@ -238,9 +238,15 @@ class GameRunner:
         def run_sync():
             """Run the subprocess synchronously (called in thread executor)"""
             try:
+                # Use shell=True and run through cmd.exe for DOS compatibility
+                # DOS programs don't handle stdin/stdout redirection well
+                # Build command string for shell execution
+                cmd_str = ' '.join(full_cmd)
+
                 result = subprocess.run(
-                    full_cmd,
+                    cmd_str,
                     cwd=str(game_folder),
+                    shell=True,
                     capture_output=True,
                     timeout=timeout,
                 )
