@@ -224,25 +224,19 @@ class GameRunner:
         else:
             cmd_args = list(args)
 
-        self.log("DEBUG", f"Running: {exe_path} {' '.join(cmd_args)} in {game_folder}") if self.verbose else None
+        if self.verbose:
+            self.log("DEBUG", f"Running: {exe_path} {' '.join(cmd_args)} in {game_folder}")
 
         try:
             # Run the process with working directory set to game folder
-            # On Windows, use CREATE_NO_WINDOW to prevent console popup
-            import subprocess as sp
-            kwargs = {
-                "cwd": str(game_folder),
-                "stdout": asyncio.subprocess.PIPE,
-                "stderr": asyncio.subprocess.STDOUT,
-            }
-            if self.is_windows:
-                # CREATE_NO_WINDOW = 0x08000000
-                kwargs["creationflags"] = getattr(sp, 'CREATE_NO_WINDOW', 0x08000000)
-
+            # Note: We don't use CREATE_NO_WINDOW because DOS console apps (like BRE/FE)
+            # need a console to function properly. The window will appear briefly.
             process = await asyncio.create_subprocess_exec(
                 exe_path,
                 *cmd_args,
-                **kwargs
+                cwd=str(game_folder),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
 
             try:
