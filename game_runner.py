@@ -238,9 +238,9 @@ class GameRunner:
         def run_sync():
             """Run the subprocess synchronously (called in thread executor)"""
             try:
-                # Use shell=True and run through cmd.exe for DOS compatibility
-                # DOS programs don't handle stdin/stdout redirection well
-                # Build command string for shell execution
+                # Use shell=True to run through cmd.exe for DOS/legacy program compatibility.
+                # Without shell=True, subprocess.run fails with WinError 87 on DOS executables
+                # because they can't handle the way Python sets up process I/O handles.
                 cmd_str = ' '.join(full_cmd)
 
                 result = subprocess.run(
