@@ -205,7 +205,12 @@ class GameRunner:
 
         The game must be run from its game folder (cwd) because it cannot
         handle being called with a full path.
+
+        Uses synchronous subprocess.run in a thread executor because
+        asyncio's subprocess has issues on Windows with console apps.
         """
+        import subprocess
+
         # Build command - game_command might be just "BRE" or a full path
         if not game_command.lower().endswith('.exe'):
             # Assume it's in the game folder
@@ -224,50 +229,62 @@ class GameRunner:
         else:
             cmd_args = list(args)
 
+        # Build full command list
+        full_cmd = [str(exe_path)] + cmd_args
+
         if self.verbose:
-            self.log("DEBUG", f"Running: {exe_path} {' '.join(cmd_args)} in {game_folder}")
+            self.log("DEBUG", f"Running: {' '.join(full_cmd)} in {game_folder}")
 
-        try:
-            # Run the process with working directory set to game folder
-            # Note: We don't use CREATE_NO_WINDOW because DOS console apps (like BRE/FE)
-            # need a console to function properly. The window will appear briefly.
-            process = await asyncio.create_subprocess_exec(
-                exe_path,
-                *cmd_args,
-                cwd=str(game_folder),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-
+        def run_sync():
+            """Run the subprocess synchronously (called in thread executor)"""
             try:
-                stdout, _ = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=timeout
+                result = subprocess.run(
+                    full_cmd,
+                    cwd=str(game_folder),
+                    capture_output=True,
+                    timeout=timeout,
                 )
-                output = stdout.decode('utf-8', errors='replace') if stdout else ""
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                raise
+                return {
+                    "success": result.returncode == 0,
+                    "output": result.stdout.decode('utf-8', errors='replace') +
+                              result.stderr.decode('utf-8', errors='replace'),
+                    "return_code": result.returncode,
+                    "error": "" if result.returncode == 0 else f"Exit code: {result.returncode}"
+                }
+            except subprocess.TimeoutExpired:
+                return {
+                    "success": False,
+                    "output": "",
+                    "return_code": -1,
+                    "error": f"Timeout after {timeout} seconds"
+                }
+            except FileNotFoundError:
+                return {
+                    "success": False,
+                    "output": "",
+                    "return_code": -1,
+                    "error": f"Executable not found: {exe_path}"
+                }
+            except OSError as e:
+                return {
+                    "success": False,
+                    "output": "",
+                    "return_code": -1,
+                    "error": f"OS error: {e}"
+                }
 
-            return GameRunResult(
-                success=process.returncode == 0,
-                game_type="",  # Will be filled in by caller
-                league_id="",  # Will be filled in by caller
-                command="",    # Will be filled in by caller
-                output=output,
-                error="" if process.returncode == 0 else f"Exit code: {process.returncode}",
-                return_code=process.returncode
-            )
+        # Run in thread executor to not block the event loop
+        result = await asyncio.to_thread(run_sync)
 
-        except FileNotFoundError:
-            return GameRunResult(
-                success=False,
-                game_type="",
-                league_id="",
-                command="",
-                error=f"Executable not found: {exe_path}"
-            )
+        return GameRunResult(
+            success=result["success"],
+            game_type="",  # Will be filled in by caller
+            league_id="",  # Will be filled in by caller
+            command="",    # Will be filled in by caller
+            output=result["output"],
+            error=result["error"],
+            return_code=result["return_code"]
+        )
 
     async def _run_linux_dosemu(
         self,
