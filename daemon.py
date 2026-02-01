@@ -26,7 +26,7 @@ import sys
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import toml
 
@@ -60,7 +60,7 @@ class NovaDaemon:
         self._last_maintenance: Optional[datetime] = None
 
         # Statistics
-        self.stats = {
+        self.stats: Dict[str, Any] = {
             "start_time": None,
             "sync_count": 0,
             "maintenance_count": 0,

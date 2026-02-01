@@ -10,7 +10,7 @@ Validates:
 
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import toml
 
@@ -34,7 +34,7 @@ class ClientValidator:
 
     def __init__(self, config_path: str = "config.toml"):
         self.config_path = config_path
-        self.config = None
+        self.config: Optional[Dict[str, Any]] = None
         self.errors: List[ValidationError] = []
         self.warnings: List[ValidationError] = []
 
@@ -92,6 +92,7 @@ class ClientValidator:
 
     def check_duplicate_directories(self) -> None:
         """Check for duplicate directories across all league entries"""
+        assert self.config is not None  # Called after load_config succeeds
         # Track all directories used
         dir_usage: Dict[str, List[Tuple[str, str]]] = {}  # dir_path -> [(league_key, dir_type)]
 
@@ -202,6 +203,7 @@ class ClientValidator:
             return
 
         # Get BBS name from config
+        assert self.config is not None  # Called after load_config succeeds
         bbs_name = self.config.get("bbs", {}).get("name")
         if not bbs_name:
             self.errors.append(
@@ -241,6 +243,8 @@ class ClientValidator:
         # Load config
         if not self.load_config():
             return False
+
+        assert self.config is not None  # load_config succeeded
 
         # Check required sections
         if "bbs" not in self.config:

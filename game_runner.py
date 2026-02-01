@@ -212,14 +212,15 @@ class GameRunner:
         import subprocess
 
         # Build command - game_command might be just "BRE" or a full path
+        exe_path: str
         if not game_command.lower().endswith('.exe'):
             # Assume it's in the game folder
-            exe_path = game_folder / f"{game_command}.EXE"
-            if not exe_path.exists():
+            exe_path_candidate = game_folder / f"{game_command}.EXE"
+            if not exe_path_candidate.exists():
                 # Try without .EXE extension (might be in PATH)
                 exe_path = game_command
             else:
-                exe_path = str(exe_path)
+                exe_path = str(exe_path_candidate)
         else:
             exe_path = game_command
 
@@ -369,14 +370,15 @@ class GameRunner:
             if log_file.exists():
                 output = log_file.read_text(errors='replace')
 
+            return_code = process.returncode if process.returncode is not None else -1
             return GameRunResult(
-                success=process.returncode == 0,
+                success=return_code == 0,
                 game_type="",
                 league_id="",
                 command="",
                 output=output,
-                error="" if process.returncode == 0 else f"Exit code: {process.returncode}",
-                return_code=process.returncode
+                error="" if return_code == 0 else f"Exit code: {return_code}",
+                return_code=return_code
             )
 
         finally:

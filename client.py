@@ -9,7 +9,7 @@ import sys
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 import toml
@@ -26,7 +26,7 @@ class NovaHubClient:
     def __init__(self, config_path: str = "config.toml", verbose: bool = False):
         self.verbose = verbose
         self.config = self.load_config(config_path)
-        self.metrics = {
+        self.metrics: Dict[str, Any] = {
             "start_time": datetime.now().isoformat(),
             "leagues": {},
             "total_uploaded": 0,
@@ -74,7 +74,7 @@ class NovaHubClient:
 
         return config
 
-    def log(self, level: str, message: str, league: str = None):
+    def log(self, level: str, message: str, league: Optional[str] = None):
         """Simple logging"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_msg = f"[{timestamp}] [{level}] {message}"
