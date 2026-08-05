@@ -45,6 +45,20 @@
     Exit codes:  0 success, 1 errors occurred, 2 configuration invalid,
                  3 another instance is already running, 4 interrupted.
 #>
+# PSScriptAnalyzer: the following are deliberate, not oversights.
+#   Write-Host          - this is an interactive console tool whose output IS
+#                         the user interface. Write-Output would pollute the
+#                         pipeline and break the exit-code contract.
+#   ShouldProcess       - -Once and -Daemon are the mode switches; a -WhatIf on
+#                         the sync loop would have nothing meaningful to report.
+#                         Install-NovaClientTask.ps1 does implement ShouldProcess,
+#                         because that one changes machine state.
+#   PSUseSingularNouns  - Get-NovaLeagues returns a collection, and the plural
+#                         reads correctly at every call site.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '')]
 [CmdletBinding()]
 param(
     [string] $Config = (Join-Path $PSScriptRoot 'config.psd1'),
@@ -122,6 +136,16 @@ function Invoke-NovaRequest {
 
     try {
         $response = Invoke-WebRequest @splat
+
+        # 5.1 has no -PassThru, so -OutFile returns nothing at all. Reaching
+        # here at all means no exception was thrown, and on 5.1 any non-2xx
+        # throws - so a null response is a success that went to the file.
+        if ($null -eq $response) {
+            return [pscustomobject]@{
+                Ok = $true; StatusCode = 200; Content = ''; Detail = ''; Transport = $false
+            }
+        }
+
         $content = ''
         if (-not $OutFile -and $null -ne $response.Content) {
             $content = if ($response.Content -is [byte[]]) {
@@ -462,7 +486,11 @@ function Get-NovaJwtExpiry {
             return ([datetimeoffset]::FromUnixTimeSeconds([long]$claims.exp)).LocalDateTime
         }
     }
-    catch { }
+    catch {
+        # Not a readable JWT. Not fatal - fall through to the conservative
+        # default below and let a 401 trigger a refresh if we guessed long.
+        Write-NovaLog DEBUG "Could not read token expiry: $($_.Exception.Message)"
+    }
     return (Get-Date).AddMinutes(15)
 }
 
@@ -793,7 +821,9 @@ function Invoke-NovaLeagueUpload {
 function Invoke-NovaLeagueDownload {
     param([hashtable] $Cfg, $League)
 
-    $packets = Get-NovaPacketList -Cfg $Cfg -League $League -UnreadOnly
+    # @() keeps an empty result an empty array - PowerShell unrolls a bare
+    # @() return into $null, and .Count on $null is a terminating error.
+    $packets = @(Get-NovaPacketList -Cfg $Cfg -League $League -UnreadOnly)
     if ($packets.Count -eq 0) {
         Write-NovaLog DEBUG "No inbound packets for $($League.LeagueId)"
         return 0
@@ -1001,7 +1031,7 @@ function Test-NovaConfig {
     $bbsName = Get-NovaSetting $Cfg 'Bbs.Name'
     if (-not $bbsName) { $null = $problems.Add('Bbs.Name is not set') }
 
-    $leagues = Get-NovaLeagues -Cfg $Cfg
+    $leagues = @(Get-NovaLeagues -Cfg $Cfg)
     if ($leagues.Count -eq 0) { $null = $warnings.Add('No enabled leagues configured') }
 
     # Every directory must be used by exactly one league. Two leagues sharing an
@@ -1141,9 +1171,13 @@ $Script:ShutdownRequested = $false
 
 function Register-NovaShutdownHandler {
     try {
+        # NB: do not name these $sender / $eventArgs. Both are PowerShell
+        # automatic variables in an event context, and assigning to an
+        # automatic variable is exactly what silently broke the old
+        # run_nova_cycle.ps1 (it used $matches, which -match overwrites).
         $handler = [ConsoleCancelEventHandler] {
-            param($eventSender, $eventArgs)
-            $eventArgs.Cancel = $true          # don't let .NET kill us mid-write
+            param($cancelSource, $cancelArgs)
+            $cancelArgs.Cancel = $true         # don't let .NET kill us mid-write
             $Script:ShutdownRequested = $true
             Write-Host ''
             Write-Host 'Shutdown requested, finishing current cycle...' -ForegroundColor Yellow

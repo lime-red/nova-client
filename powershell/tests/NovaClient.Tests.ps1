@@ -9,36 +9,66 @@
     Run:
         Invoke-Pester -Path powershell/tests
 
-    NovaClient-WinPS5.ps1 can only be exercised on Windows, so those cases are
-    skipped elsewhere. NovaClient-PS7.ps1 runs anywhere PowerShell 7 does, which
-    is what CI checks.
+    A target is only included if its interpreter is present, so on Linux only
+    NovaClient-PS7.ps1 is exercised - that is what CI covers. Run this on the
+    Windows BBS box to cover NovaClient-WinPS5.ps1 as well.
 #>
+
+# --- Discovery scope ---------------------------------------------------------
+# Pester evaluates `Describe -ForEach` during discovery, which happens BEFORE
+# any BeforeAll runs. The target list therefore has to be built out here; if it
+# is built inside BeforeAll the -ForEach sees $null and every case runs once
+# with an empty $_.
+$RepoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$PsDir    = Join-Path $RepoRoot 'powershell'
+
+# A target is only included if its interpreter actually exists here, rather
+# than being included and skipped: Pester's -Skip is awkward to drive from a
+# -ForEach item, and an absent shell is not a skipped test, it is a target that
+# does not apply to this machine. Windows PowerShell 5.1 exists only on Windows.
+$Targets = @()
+if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+    $Targets += @{
+        Name   = 'PS7'
+        Shell  = 'pwsh'
+        Script = Join-Path $PsDir 'NovaClient-PS7.ps1'
+    }
+}
+if (Get-Command powershell.exe -ErrorAction SilentlyContinue) {
+    $Targets += @{
+        Name   = 'WinPS5'
+        Shell  = 'powershell.exe'
+        Script = Join-Path $PsDir 'NovaClient-WinPS5.ps1'
+    }
+}
+if ($Targets.Count -eq 0) { throw 'No PowerShell interpreter found to test against.' }
 
 BeforeAll {
     $Script:RepoRoot   = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-    $Script:PsDir      = Join-Path $RepoRoot 'powershell'
-    $Script:MockServer = Join-Path $RepoRoot 'python/tests/mock_server.py'
+    $Script:PsDir      = Join-Path $Script:RepoRoot 'powershell'
+    # The seeded wrapper around python/tests/mock_server.py: same mock, plus
+    # an inbound packet and a nodelist already waiting for us.
+    $Script:MockServer = Join-Path $Script:PsDir 'tests/seeded_hub.py'
+    $Script:ExpectedPacket = Join-Path $Script:PsDir 'tests/expected_packet.bin'
     $Script:HubUrl     = 'http://127.0.0.1:8000'
 
-    # Which interpreter runs which script.
-    $Script:Targets = @()
-    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
-        $Script:Targets += @{
-            Name   = 'PS7'
-            Shell  = 'pwsh'
-            Script = Join-Path $PsDir 'NovaClient-PS7.ps1'
-            Skip   = $false
-        }
-    }
-    $Script:Targets += @{
-        Name   = 'WinPS5'
-        Shell  = 'powershell'
-        Script = Join-Path $PsDir 'NovaClient-WinPS5.ps1'
-        Skip   = -not $IsWindows
-    }
-
     function Start-MockHub {
-        $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' }
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+        [CmdletBinding()] param()
+
+        # Prefer a virtualenv interpreter: the mock hub needs fastapi and
+        # uvicorn, which the system python almost certainly does not have.
+        $candidates = @(
+            (Join-Path $Script:RepoRoot '.venv/bin/python')
+            (Join-Path $Script:RepoRoot 'python/.venv/bin/python')
+            (Join-Path $Script:RepoRoot '.venv/Scripts/python.exe')
+            (Join-Path $Script:RepoRoot 'python/.venv/Scripts/python.exe')
+        )
+        $python = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $python) {
+            $python = if (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' }
+        }
+
         $proc = Start-Process -FilePath $python -ArgumentList $Script:MockServer `
             -PassThru -RedirectStandardOutput (Join-Path ([IO.Path]::GetTempPath()) 'mockhub.out') `
             -RedirectStandardError (Join-Path ([IO.Path]::GetTempPath()) 'mockhub.err')
@@ -52,10 +82,13 @@ BeforeAll {
             }
             catch { Start-Sleep -Milliseconds 250 }
         }
-        throw 'Mock hub did not become ready within 30s'
+        $hint = Get-Content (Join-Path ([IO.Path]::GetTempPath()) 'mockhub.err') -Raw -ErrorAction SilentlyContinue
+        throw "Mock hub did not become ready within 30s (using '$python').`n$hint"
     }
 
     function New-TestWorkspace {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+        [CmdletBinding()]
         <#
             Builds a throwaway tree with outbound/inbound/game dirs, a nodes.dat
             that agrees with the config, and a config.psd1 pointing at all of it.
@@ -175,10 +208,13 @@ Describe 'Static analysis' {
     }
 }
 
-Describe 'Nova Client <_.Name>' -ForEach @( $Script:Targets ) -Skip:($_.Skip) {
+Describe 'Nova Client <_.Name>' -ForEach $Targets {
 
     BeforeEach {
         $Script:Ws = New-TestWorkspace
+        # Downloading marks a packet read hub-side, so every test starts from a
+        # freshly seeded hub rather than inheriting the previous test's leftovers.
+        $null = Invoke-RestMethod -Method Post -Uri "$Script:HubUrl/__test__/reset" -TimeoutSec 5
     }
 
     AfterEach {
@@ -285,39 +321,71 @@ Describe 'Nova Client <_.Name>' -ForEach @( $Script:Targets ) -Skip:($_.Skip) {
             Test-Path (Join-Path $Script:Ws.Outbound 'readme.txt') | Should -BeTrue
         }
 
-        It 'downloads an inbound packet byte-for-byte and stops seeing it as unread' {
-            # Put a packet addressed to us (dest 02) on the hub, via a second
-            # client that owns source index 01.
-            $body = [byte[]](32..96)
+        It 'downloads an inbound packet byte-for-byte, atomically' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'Downloaded 555B0102\.007'
+
+            $landed = Join-Path $Script:Ws.Inbound '555B0102.007'
+            Test-Path $landed | Should -BeTrue
+
+            $got = [IO.File]::ReadAllBytes($landed)
+            $want = [IO.File]::ReadAllBytes($Script:ExpectedPacket)
+            $got.Length | Should -Be $want.Length
+            (Compare-Object $got $want -SyncWindow 0) | Should -BeNullOrEmpty
+
+            # A .part left behind means the rename-into-place failed, and the
+            # game could otherwise have seen a half-written packet.
+            @(Get-ChildItem $Script:Ws.Inbound -Filter '*.part').Count | Should -Be 0
+        }
+
+        It 'writes the nodelist into the game folder' {
+            $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            Test-Path (Join-Path $Script:Ws.Game 'BRNODES.555') | Should -BeTrue
+        }
+
+        It 'stops seeing a packet as unread once downloaded' {
+            $first = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $first.Output | Should -Match 'Total Downloaded: 1'
+
+            # The GET is the acknowledgement - there is no separate ack call -
+            # so a second run must find nothing.
+            $second = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $second.ExitCode | Should -Be 0
+            $second.Output | Should -Match 'Total Downloaded: 0'
+        }
+
+        It 'refuses to upload a packet claiming a source BBS that is not ours' {
+            # The client filters these out locally, but the hub enforces it too.
+            # Confirm the hub's answer is 403 so the client's handling of that
+            # status is exercised against reality, not an assumption.
             $token = (Invoke-RestMethod -Method Post -Uri "$Script:HubUrl/service/api/v1/auth/token" `
-                -Body @{ grant_type = 'client_credentials'; client_id = 'test_client'; client_secret = 'test_secret' }).access_token
+                -Body @{ grant_type = 'client_credentials'
+                         client_id = 'test_client'; client_secret = 'test_secret' }).access_token
 
-            # The mock stores by filename; upload as ourselves then re-list is
-            # not possible (we only see packets addressed to us), so seed the
-            # hub with a packet from 01 to 02 using the storage-seeding endpoint
-            # shape the mock exposes: a direct PUT is rejected for a foreign
-            # source, so this asserts that rejection instead.
-            $seed = $null
-            try {
-                $seed = Invoke-WebRequest -Method Put `
-                    -Uri "$Script:HubUrl/service/api/v1/leagues/555B/packets/555B0102.001" `
-                    -Headers @{ Authorization = "Bearer $token" } `
-                    -Body $body -ContentType 'application/octet-stream' `
-                    -SkipHttpErrorCheck
-            }
-            catch { $seed = $_.Exception.Response }
+            $resp = Invoke-WebRequest -Method Put `
+                -Uri "$Script:HubUrl/service/api/v1/leagues/555B/packets/555B0902.001" `
+                -Headers @{ Authorization = "Bearer $token" } `
+                -Body ([byte[]](32..96)) -ContentType 'application/octet-stream' `
+                -SkipHttpErrorCheck
 
-            # The hub must refuse to let us claim another BBS as the source.
-            [int]$seed.StatusCode | Should -Be 403
+            [int]$resp.StatusCode | Should -Be 403
         }
     }
 
     Context 'safety' {
-        It 'refuses to start a second instance against the same config' -Skip:(-not $IsWindows) {
+        It 'refuses to start a second instance against the same config' {
+            # Hoist out of $_ before the Start-Job: $_ does not survive into a
+            # new runspace, and reading it inside -ArgumentList is easy to get
+            # subtly wrong.
+            $jobShell = $_.Shell
+            $jobScript = $_.Script
+            $jobConfig = $Script:Ws.Config
+
             $job = Start-Job -ScriptBlock {
-                param($shell, $script, $config)
-                & $shell -NoProfile -ExecutionPolicy Bypass -File $script -Config $config -Daemon
-            } -ArgumentList $_.Shell, $_.Script, $Script:Ws.Config
+                & $using:jobShell -NoProfile -ExecutionPolicy Bypass `
+                    -File $using:jobScript -Config $using:jobConfig -Daemon
+            }
 
             try {
                 Start-Sleep -Seconds 3

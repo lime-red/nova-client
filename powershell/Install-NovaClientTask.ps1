@@ -40,6 +40,9 @@
     To remove:  Unregister-ScheduledTask -TaskName NovaClient -Confirm:$false
     To check:   Get-ScheduledTask NovaClient | Get-ScheduledTaskInfo
 #>
+# Write-Host is intentional: this is an installer whose console output is
+# the user interface, and it must not be captured into the pipeline.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '')]
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string] $Config = (Join-Path $PSScriptRoot 'config.psd1'),
