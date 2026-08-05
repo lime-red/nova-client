@@ -14,7 +14,7 @@ Each BBS entry consists of 6 lines followed by a blank line:
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -149,8 +149,8 @@ class NodesFileParser:
 
     def check_duplicate_indices(self) -> List[str]:
         """Check for duplicate BBS indices"""
-        seen = {}
-        duplicates = []
+        seen: Dict[int, BBSNode] = {}
+        duplicates: List[str] = []
         for node in self.nodes:
             if node.bbs_index in seen:
                 duplicates.append(
