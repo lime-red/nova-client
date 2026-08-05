@@ -11,6 +11,7 @@ sent_action = "archive"
 archive_dir = "./sent"
 max_retries = 3
 retry_delay = 5
+timeout_seconds = 120
 metrics_file = "./metrics.json"
 
 # Daemon mode configuration (for daemon.py)

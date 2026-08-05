@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 import toml
 
+from _version import USER_AGENT, __version__
+
 # Load environment variables
 from dotenv import load_dotenv
 
@@ -146,11 +148,18 @@ class NovaHubClient:
 
     async def run(self):
         """Execute one complete sync run"""
-        self.log("INFO", "Nova Hub Client starting")
+        self.log("INFO", f"Nova Hub Client {__version__} starting")
         self.log("INFO", f"BBS: {self.config['bbs']['name']}")
         self.log("INFO", f"Hub: {self.config['hub']['url']}")
 
-        async with aiohttp.ClientSession() as session:
+        # Identify the implementation in the hub's access logs, and set an
+        # explicit timeout rather than inheriting aiohttp's 5-minute default.
+        timeout = aiohttp.ClientTimeout(
+            total=self.config.get("sync", {}).get("timeout_seconds", 120)
+        )
+        async with aiohttp.ClientSession(
+            timeout=timeout, headers={"User-Agent": USER_AGENT}
+        ) as session:
             self.session = session
 
             # Get OAuth token

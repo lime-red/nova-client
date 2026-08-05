@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 
 import toml
 
+from _version import __version__
 from client import NovaHubClient
 from game_runner import GameRunner, GameRunResult
 
@@ -105,7 +106,7 @@ class NovaDaemon:
     async def run(self):
         """Main daemon loop"""
         self.stats["start_time"] = datetime.now().isoformat()
-        self.log("INFO", "Nova Client Daemon starting")
+        self.log("INFO", f"Nova Client Daemon {__version__} starting")
         self.log("INFO", f"BBS: {self.config.get('bbs', {}).get('name', 'Unknown')}")
         self.log("INFO", f"Hub: {self.config.get('hub', {}).get('url', 'Unknown')}")
 

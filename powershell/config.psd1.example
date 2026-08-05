@@ -1,0 +1,108 @@
+<#
+    Nova Client configuration.
+
+    Copy this file to config.psd1 and edit it. config.psd1 is gitignored, so
+    your credentials will not be committed by accident.
+
+    This is a PowerShell data file: it holds data only and cannot execute code,
+    so it is safe to read even from a config someone emailed you.
+
+    Note the single quotes around paths. In single-quoted PowerShell strings a
+    backslash is just a backslash - write 'C:\BBS\BRE', not 'C:\\BBS\\BRE'.
+#>
+@{
+
+    Hub = @{
+        # Base URL of the hub. No trailing slash needed.
+        Url = 'https://hub.example.com'
+
+        # Issued by the hub sysop when your BBS is added.
+        # You can leave these empty here and set the environment variables
+        # HUB_CLIENT_ID / HUB_CLIENT_SECRET instead, which is the better option
+        # if this file is on a machine other people can read.
+        ClientId     = ''
+        ClientSecret = ''
+    }
+
+    Bbs = @{
+        # Must match the name recorded against your BBS index in the game's
+        # nodes.dat file. -Validate checks this for you, because a mismatch
+        # here produces packets that route to the wrong place.
+        Name = 'My BBS'
+    }
+
+    Sync = @{
+        # What to do with a packet once the hub has confirmed receipt.
+        #   'archive' - move it to ArchiveDir (recommended while bedding in)
+        #   'delete'  - remove it
+        # A packet is only ever removed after a successful upload; a failed one
+        # stays put and is retried on the next cycle.
+        SentAction = 'archive'
+        ArchiveDir = '.\sent'
+
+        MaxRetries        = 3
+        RetryDelaySeconds = 5
+
+        # Per-request HTTP timeout.
+        TimeoutSeconds = 120
+
+        # Written after every sync; handy for monitoring.
+        MetricsFile = '.\metrics.json'
+    }
+
+    Daemon = @{
+        # How often to check the hub for work.
+        SyncIntervalSeconds = 120
+
+        # How often to run game maintenance (e.g. BRE PLANETARY) regardless of
+        # whether anything arrived.
+        MaintenanceIntervalSeconds = 600
+
+        # Give up on a maintenance run after this long and kill the process tree.
+        MaintenanceTimeoutSeconds = 300
+
+        # Run maintenance immediately when packets arrive, instead of waiting
+        # for the next scheduled run. This is what keeps turnaround quick.
+        RunMaintenanceOnDownload = $true
+    }
+
+    # One entry per league you are a member of. Add as many as you like.
+    Leagues = @(
+
+        @{
+            Game    = 'BRE'      # 'BRE' (Barren Realms Elite) or 'FE' (Falcon's Eye)
+            Number  = '015'      # exactly 3 digits, as issued by the hub
+            Enabled = $true
+
+            # Your BBS index within THIS league, 1-255. Assigned by the hub
+            # sysop, and it can differ between leagues. Getting this wrong is
+            # the single most common setup mistake - the hub will reject your
+            # uploads with a 403.
+            BbsIndex = 2
+
+            # Where the game writes packets for other BBSes, and where it
+            # expects to find packets addressed to you.
+            OutboundDir = 'C:\BBS\DOORS\bre_015\OUTBOUND'
+            InboundDir  = 'C:\BBS\DOORS\bre_015\INBOUND'
+
+            # Required for -Daemon. This is where BRE.EXE lives, and where the
+            # nodelist gets written.
+            GameFolder      = 'C:\BBS\DOORS\BRE_015'
+            GameCommand     = 'BRE'
+            MaintenanceArgs = 'PLANETARY'
+        }
+
+        # A second league - note the different BbsIndex.
+        # @{
+        #     Game    = 'FE'
+        #     Number  = '015'
+        #     Enabled = $true
+        #     BbsIndex = 3
+        #     OutboundDir = 'C:\BBS\DOORS\fe_015\OUTBOUND'
+        #     InboundDir  = 'C:\BBS\DOORS\fe_015\INBOUND'
+        #     GameFolder      = 'C:\BBS\DOORS\FE_015'
+        #     GameCommand     = 'FE'
+        #     MaintenanceArgs = 'PLANETARY'
+        # }
+    )
+}

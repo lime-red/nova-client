@@ -1,239 +1,115 @@
 # Nova Client
 
-Async Python client for syncing packets with Nova Hub. Supports one-shot syncs and continuous daemon operation with automatic game maintenance.
+Syncs BBS door-game packets with a [Nova Hub](https://gitea-hl/lime/nova-hub), and runs
+game maintenance when packets arrive. Supports **Barren Realms Elite** and **Falcon's Eye**
+inter-BBS leagues.
 
-## Features
+There are two independent implementations. **Pick one — you do not need both.** They speak
+the same API to the same hub and behave the same way; they differ only in what has to be
+installed on the machine.
 
-- **OAuth2 Authentication**: Secure client credentials flow
-- **One-Shot Sync**: Run once via cron or manual execution
-- **Daemon Mode**: Continuous operation with scheduled sync and maintenance
-- **Cross-Platform Game Execution**: Windows native or Linux via dosemu
-- **Multi-League Support**: Handle multiple BRE and FE leagues simultaneously
-- **Configuration Validation**: Verify directories, nodes.dat files, and BBS index consistency
-- **Metrics Tracking**: JSON metrics output for monitoring
+| | [`python/`](python/) | [`powershell/`](powershell/) |
+|---|---|---|
+| **Pick this if** | you run Linux, or you already have Python | you run Windows and would rather not install a runtime |
+| **Runs on** | Linux, Windows | Windows |
+| **Needs** | Python 3.12+, `pip install -r requirements.txt` | nothing — Windows PowerShell 5.1 ships with Windows |
+| **Config file** | `config.toml` | `config.psd1` |
+| **Runs the game via** | native `.EXE` on Windows, dosemu on Linux | native `.EXE` |
+| **Runs unattended as** | systemd service ([`linux/`](linux/)) | Scheduled Task (`Install-NovaClientTask.ps1`) |
 
-## Requirements
+Both implementations:
 
-- Python 3.12+
-- aiohttp, toml, python-dotenv
+- authenticate with OAuth2 client credentials,
+- upload the packets your game has written for other BBSes,
+- download the packets addressed to you,
+- keep your league nodelist up to date,
+- and (in daemon mode) run `BRE PLANETARY` / `FE PLANETARY` on a schedule or as soon as
+  packets arrive.
 
-## Installation
+## Getting started
+
+You need three things from whoever runs the hub: a **client ID**, a **client secret**, and
+your **BBS index** for each league you join. The BBS index is a number from 1 to 255 and it
+can be different in each league.
+
+### Windows, no Python
+
+```powershell
+cd powershell
+Copy-Item config.psd1.example config.psd1
+notepad config.psd1                       # fill in URL, credentials, BbsIndex, directories
+
+.\NovaClient-WinPS5.ps1 -Validate         # check everything before touching the network
+.\NovaClient-WinPS5.ps1 -Once -Verbose    # one sync, with detail
+.\NovaClient-WinPS5.ps1 -Daemon           # run continuously
+```
+
+See [`powershell/README.md`](powershell/README.md). If you have PowerShell 7, use
+`NovaClient-PS7.ps1` instead — same options.
+
+### Python
 
 ```bash
-# Clone or copy nova-client directory
-cd nova-client
+cd python
+python -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp config.toml.example config.toml        # then edit it
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# Install dependencies
-pip install -r requirements.txt
+.venv/bin/python client.py --validate
+.venv/bin/python client.py --verbose      # one sync
+.venv/bin/python daemon.py --verbose      # run continuously
 ```
 
-## Configuration
+See [`python/README.md`](python/README.md), and [`linux/`](linux/) for the systemd unit.
 
-Copy the example configuration and edit:
+## Packet naming
 
-```bash
-cp config.toml.example config.toml
+Packet filenames carry their own routing information:
+
+```
+555B0201.001
+│  ││ │  └── sequence number, 000-999, wraps
+│  ││ └───── destination BBS index, 2 hex digits
+│  │└─────── source BBS index, 2 hex digits
+│  └──────── game: B = Barren Realms Elite, F = Falcon's Eye
+└─────────── league number, 3 digits
 ```
 
-### Hub Connection
+The hub checks that the **source** index matches the client uploading it, and that the
+**destination** matches the client downloading it. If your `BbsIndex` is wrong, uploads are
+rejected with a `403` — that is far and away the most common setup problem, and both clients'
+`-Validate` / `--validate` modes check for it before you hit the network.
 
-```toml
-[hub]
-url = "https://hub.example.com"
-client_id = "your_client_id"      # Get from hub admin
-client_secret = "your_secret"     # Get from hub admin
+Nodelists are `BRNODES.<league>` / `FENODES.<league>`. The hub generates them; clients only
+ever download them.
 
-[bbs]
-name = "My BBS"
+## Repository layout
+
+```
+python/       Python client — client.py (one-shot), daemon.py (continuous)
+powershell/   PowerShell client — Windows only, two variants for 5.1 and 7+
+linux/        systemd unit and shell helpers
+VERSION       current release
+CHANGELOG.md  what changed and when
 ```
 
-Credentials can also be set via environment variables:
-- `HUB_CLIENT_ID`
-- `HUB_CLIENT_SECRET`
+## Upgrading from 0.2.0 or earlier
 
-### Sync Settings
+**The Python client moved into `python/`.** Nothing about how it works changed, but paths did.
+After pulling this release, update wherever you launch it from:
 
-```toml
-[sync]
-sent_action = "archive"       # "archive" or "delete"
-archive_dir = "./sent"        # Where to move sent packets
-max_retries = 3
-retry_delay = 5
-metrics_file = "./metrics.json"
-```
+| | Before | After |
+|---|---|---|
+| systemd | `WorkingDirectory=/home/lime/nova-client` | `WorkingDirectory=/home/lime/nova-client/python` |
+| Windows | `cd C:\BBS\nova-client` | `cd C:\BBS\nova-client\python` |
+| CI / scripts | `pytest` at the repo root | `cd python && pytest` |
 
-### League Configuration
+Your `config.toml` is not affected. Keep it wherever it is and pass an absolute path with
+`--config`, which is what [`linux/nova-client.service`](linux/nova-client.service) now does —
+it means a future reshuffle of the tree cannot break your config again.
 
-Each league requires:
-- `bbs_index`: Your BBS ID for this league (integer 1-255, must match hub config)
-- `outbound_dir`: Where your game writes outbound packets
-- `inbound_dir`: Where to place downloaded packets
+Pull, update the path, restart, in that order. A node that pulls while its service is running
+will keep working until the next restart, but do not leave it in that state.
 
-```toml
-[leagues.BRE.555]
-enabled = true
-bbs_index = 2
-outbound_dir = "/opt/bre/league555/outbound"
-inbound_dir = "/opt/bre/league555/inbound"
+## Licence
 
-# For daemon mode - game execution settings
-game_folder = "/home/user/.dosemu/drive_c/BBS/BRE"
-game_command = "BRE"
-maintenance_args = "PLANETARY"
-game_dos_path = "C:\\BBS\\BRE"  # DOS path inside dosemu
-```
-
-### Daemon Configuration
-
-For continuous operation:
-
-```toml
-[daemon]
-enabled = true
-sync_interval = 120               # Seconds between hub syncs
-maintenance_interval = 600        # Seconds between scheduled maintenance
-maintenance_timeout = 300         # Max seconds for game execution
-run_maintenance_on_download = true
-
-# Linux dosemu settings
-dosemu_path = "/usr/bin/dosemu"
-dosemu_config_dir = "./dosemu_configs"
-log_dir = "./logs"
-```
-
-## Usage
-
-### One-Shot Sync
-
-Run a single sync cycle:
-
-```bash
-python client.py
-python client.py --config myconfig.toml --verbose
-```
-
-Schedule via cron:
-```bash
-# Sync every 5 minutes
-*/5 * * * * cd /path/to/nova-client && .venv/bin/python client.py
-```
-
-### Daemon Mode
-
-Continuous operation with automatic sync and game maintenance:
-
-```bash
-python daemon.py
-python daemon.py --config config.toml --verbose
-```
-
-The daemon:
-1. Syncs with Nova Hub at `sync_interval`
-2. Runs game maintenance at `maintenance_interval`
-3. Triggers immediate maintenance when packets are downloaded (if enabled)
-
-### Configuration Validation
-
-Validate your config before running:
-
-```bash
-python validator.py
-python validator.py --config myconfig.toml
-```
-
-Checks:
-- Directory paths exist and are accessible
-- No duplicate directories across leagues
-- nodes.dat files are parseable (if present)
-- BBS index consistency
-
-## Components
-
-| File | Description |
-|------|-------------|
-| `client.py` | One-shot sync client with OAuth |
-| `daemon.py` | Continuous operation daemon |
-| `game_runner.py` | Cross-platform BRE/FE execution |
-| `validator.py` | Configuration validation |
-| `nodes_parser.py` | BRE/FE nodes.dat file parser |
-
-## Packet Format
-
-Packets follow the naming convention: `<league><game><source><dest>.<seq>`
-
-Example: `555B0201.001`
-- League: `555`
-- Game: `B` (BRE) or `F` (FE)
-- Source BBS: `02` (hex)
-- Destination BBS: `01` (hex)
-- Sequence: `001` (000-999, wraps)
-
-## Metrics
-
-After each sync, `metrics.json` contains:
-
-```json
-{
-  "start_time": "2025-01-06T10:00:00",
-  "end_time": "2025-01-06T10:00:05",
-  "total_uploaded": 3,
-  "total_downloaded": 2,
-  "success": true,
-  "errors": [],
-  "leagues": {
-    "BRE_555": {
-      "uploaded": 3,
-      "downloaded": 2,
-      "errors": 0
-    }
-  }
-}
-```
-
-## Testing
-
-```bash
-# Install test dependencies
-pip install -r requirements-dev.txt
-
-# Run tests (requires mock server from nova-hub)
-cd ../nova-hub && .venv/bin/python tests/mock_hub.py &
-cd ../nova-client && pytest tests/
-```
-
-## Troubleshooting
-
-### Authentication Errors
-- Verify `client_id` and `client_secret` match hub admin settings
-- Check hub is reachable: `curl https://hub.example.com/service/docs`
-- Confirm client is marked active in hub admin
-
-### Directory Errors
-- Run `python validator.py` to check all paths
-- Verify game has created outbound directory
-- Check file permissions
-
-### Connection Errors
-- Check hub URL (include port if non-standard)
-- Verify firewall allows outbound HTTPS
-- Test connectivity: `curl https://hub.example.com/health`
-
-### Dosemu Issues (Linux)
-- Ensure dosemu 2.x is installed
-- Verify `dosemu_path` points to correct binary
-- Check `dosemu_config_dir` contains valid configs
-- Review logs in configured `log_dir`
-
-## Exit Codes
-
-- `0`: Success
-- `1`: Errors occurred (check metrics.json and console output)
-
-## License
-
-MIT License - See LICENSE file
+See the repository for licence terms.

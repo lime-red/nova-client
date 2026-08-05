@@ -7,10 +7,22 @@ data/
 *.db
 *.log
 .pytest_cache/
+.mypy_cache/
 .DS_Store
-config.toml
+._*
 *.ipynb
 
+# Local configuration — contains hub credentials, never commit
+config.toml
+config_*.toml
+config.psd1
+config_*.psd1
+
+# Runtime working directories and state
 inbound/
-outound/
+outbound/
+sent/
+logs/
+dosemu_configs/
 metrics.json
+*.part
