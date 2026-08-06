@@ -52,8 +52,14 @@ EnvironmentFile=-/etc/default/nova-client
 
 # Fail fast and legibly on a bad config, rather than crash-looping with the
 # real reason buried in the middle of a restart storm.
-ExecStartPre=/home/lime/nova-client/.venv/bin/python3 daemon.py --validate --config /home/lime/nova-client/config.toml
-ExecStart=/home/lime/nova-client/.venv/bin/python3 daemon.py --verbose --config /home/lime/nova-client/config.toml
+#
+# The config lives in python/ alongside the code, which is what README.md tells
+# you to do and where `uv run client.py --validate` looks by default. Keep these
+# two paths and WorkingDirectory above in step if you move it - passing an
+# absolute path here is deliberate, so a wrong WorkingDirectory fails loudly
+# instead of silently picking up a different file.
+ExecStartPre=/home/lime/nova-client/.venv/bin/python3 daemon.py --validate --config /home/lime/nova-client/python/config.toml
+ExecStart=/home/lime/nova-client/.venv/bin/python3 daemon.py --verbose --config /home/lime/nova-client/python/config.toml
 
 Restart=always
 RestartSec=5

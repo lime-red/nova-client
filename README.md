@@ -103,10 +103,17 @@ After pulling this release, update wherever you launch it from:
 | systemd | `WorkingDirectory=/home/lime/nova-client` | `WorkingDirectory=/home/lime/nova-client/python` |
 | Windows | `cd C:\BBS\nova-client` | `cd C:\BBS\nova-client\python` |
 | CI / scripts | `pytest` at the repo root | `cd python && pytest` |
+| Config | `config.toml` at the repo root | `python/config.toml` |
 
-Your `config.toml` is not affected. Keep it wherever it is and pass an absolute path with
-`--config`, which is what [`linux/nova-client.service`](linux/nova-client.service) now does —
-it means a future reshuffle of the tree cannot break your config again.
+Move your config with the code — it belongs next to the client that reads it, which is where
+`client.py --validate` looks by default:
+
+```bash
+mv /home/lime/nova-client/config.toml /home/lime/nova-client/python/
+```
+
+[`linux/nova-client.service`](linux/nova-client.service) still passes it by absolute path, so a
+wrong `WorkingDirectory` fails loudly rather than quietly loading a different file.
 
 Pull, update the path, restart, in that order. A node that pulls while its service is running
 will keep working until the next restart, but do not leave it in that state.

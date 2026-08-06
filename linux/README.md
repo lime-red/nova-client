@@ -19,8 +19,16 @@ The unit assumes:
 - the repo checked out at `/home/lime/nova-client`,
 - its virtualenv at the repo root (`/home/lime/nova-client/.venv`),
 - the Python client in `python/` (this is where it moved in 0.3.0),
-- `config.toml` at the repo root, passed by absolute path so a future reshuffle of the tree
-  cannot break it.
+- `config.toml` in `python/` alongside the code — the same place `python/README.md` tells you
+  to create it, and where `client.py --validate` looks by default. The unit still passes it by
+  absolute path, so a wrong `WorkingDirectory` fails loudly instead of quietly loading a
+  different file.
+
+If you are upgrading from 0.2.0, your `config.toml` was at the repo root. Move it:
+
+```bash
+mv /home/lime/nova-client/config.toml /home/lime/nova-client/python/
+```
 
 ### Keeping credentials out of the checkout
 
