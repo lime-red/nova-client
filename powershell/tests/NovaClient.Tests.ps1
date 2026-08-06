@@ -503,6 +503,41 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             }
         }
 
+        It 'runs daemon cycles without raising an error' {
+            # The single-instance test above also starts a daemon, but only ever
+            # inspects the *second* process - so the first one was free to throw
+            # on every cycle unnoticed, which is exactly what it did: the wait
+            # calculation blew up on the first pass, before maintenance had ever
+            # run. The daemon's own catch swallowed it and packets still moved,
+            # so nothing else noticed either. Watch the output, not just an exit
+            # code.
+            $jobShell = $_.Shell
+            $jobScript = $_.Script
+            $jobConfig = $Script:Ws.Config
+
+            $job = Start-Job -ScriptBlock {
+                & $using:jobShell -NoProfile -ExecutionPolicy Bypass `
+                    -File $using:jobScript -Config $using:jobConfig -Daemon -Verbose
+            }
+
+            try {
+                # SyncIntervalSeconds is 5 in the test config, so this covers the
+                # first cycle, the wait, and at least one more.
+                Start-Sleep -Seconds 12
+                $output = (Receive-Job $job) | Out-String
+
+                $output | Should -Not -Match 'Daemon cycle error'
+                $output | Should -Not -Match 'Unhandled error'
+                # Prove it actually looped rather than dying quietly.
+                ([regex]::Matches($output, 'Run Summary')).Count |
+                    Should -BeGreaterThan 1 -Because 'the daemon should complete repeated cycles'
+            }
+            finally {
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It 'exits 2 when the config file does not exist' {
             $r = Invoke-Client -Target $_ -ConfigPath (Join-Path $Script:Ws.Root 'nope.psd1') -ClientArgs @('-Once')
             $r.ExitCode | Should -Be 2

@@ -1313,9 +1313,22 @@ function Start-NovaDaemon {
             # Recomputing from actual elapsed time rather than trusting the
             # timer means a laptop resuming from sleep doesn't skip a cycle.
             $syncWait = $syncInterval - ((Get-Date) - $lastSync).TotalSeconds
-            $maintWait = if ($lastSync -eq [datetime]::MinValue) { [double]::MaxValue }
-                         else { $maintInterval - ((Get-Date) - $lastMaintenance).TotalSeconds }
-            $wait = [Math]::Max(1, [Math]::Min([Math]::Min($syncWait, $maintWait), 10))
+
+            $maintWait = [double]::MaxValue
+            if ($lastSync -ne [datetime]::MinValue) {
+                $maintWait = $maintInterval - ((Get-Date) - $lastMaintenance).TotalSeconds
+            }
+
+            # Clamped with comparisons rather than [Math]::Min/Max on purpose.
+            # Until maintenance has run once, $lastMaintenance is DateTime.MinValue
+            # and $maintWait is about -6.4e10 - correct, meaning "long overdue" -
+            # but [Math]::Max(1, $x) resolves to the Int32 overload from the
+            # literal 1 and throws converting a number that size. Everything here
+            # stays [double] until the single cast at the end.
+            $wait = $syncWait
+            if ($maintWait -lt $wait) { $wait = $maintWait }
+            if ($wait -gt 10) { $wait = 10 }
+            if ($wait -lt 1)  { $wait = 1 }
             Wait-NovaInterval -Seconds ([int]$wait)
         }
         catch {
