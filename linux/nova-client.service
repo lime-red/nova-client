@@ -1,0 +1,95 @@
+# Nova Client daemon.
+#
+# Install:
+#   sudo cp linux/nova-client.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nova-client
+#
+# Adjust User/Group and the three paths below to match your install. The paths
+# assume the repo is checked out at /home/lime/nova-client with its virtualenv
+# at the repo root and the Python client in python/.
+#
+# Watch it with:
+#   journalctl -u nova-client -f
+
+[Unit]
+Description=Nova Client daemon (BBS packet sync + game maintenance)
+Documentation=https://gitea-hl/lime/nova-client
+After=network-online.target
+Wants=network-online.target
+
+# systemd's default is 5 starts in 10 seconds, after which it gives up
+# permanently and leaves the unit dead. Combined with Restart=always below,
+# any fault that kills the daemon quickly - a bad config, an unreachable hub
+# at boot - would silently take the node offline until someone noticed.
+# 10 starts per 5 minutes tolerates a transient fault without masking a real
+# crash loop.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+# Type=exec rather than simple: systemd waits for a successful execve, so a
+# missing interpreter or a typo in ExecStart is reported as a start failure
+# instead of a "successful" start followed by an immediate exit.
+Type=exec
+User=lime
+Group=lime
+WorkingDirectory=/home/lime/nova-client/python
+
+# Without this, Python buffers stdout when it is a pipe, and journald receives
+# your logs in 8 KB bursts - so `journalctl -f` sits silent for an hour and
+# then dumps everything at once. This is the difference between logs you can
+# debug with and logs you can only read afterwards.
+Environment=PYTHONUNBUFFERED=1
+
+# Optional. Keeps hub credentials out of the repo checkout: client.py already
+# prefers HUB_CLIENT_ID / HUB_CLIENT_SECRET from the environment over whatever
+# is in config.toml, so no code change is needed to use this.
+#   sudo install -m 600 -o root -g root /dev/null /etc/default/nova-client
+#   printf 'HUB_CLIENT_ID=...\nHUB_CLIENT_SECRET=...\n' | sudo tee /etc/default/nova-client
+# The leading '-' means "start anyway if the file is absent".
+EnvironmentFile=-/etc/default/nova-client
+
+# Fail fast and legibly on a bad config, rather than crash-looping with the
+# real reason buried in the middle of a restart storm.
+#
+# The config lives in python/ alongside the code, which is what README.md tells
+# you to do and where `uv run client.py --validate` looks by default. Keep these
+# two paths and WorkingDirectory above in step if you move it - passing an
+# absolute path here is deliberate, so a wrong WorkingDirectory fails loudly
+# instead of silently picking up a different file.
+ExecStartPre=/home/lime/nova-client/.venv/bin/python3 daemon.py --validate --config /home/lime/nova-client/python/config.toml
+ExecStart=/home/lime/nova-client/.venv/bin/python3 daemon.py --verbose --config /home/lime/nova-client/python/config.toml
+
+Restart=always
+RestartSec=5
+
+# 'mixed' sends SIGTERM to the main process only and SIGKILL to the rest of
+# the group after TimeoutStopSec. daemon.py handles SIGTERM and shuts down
+# cleanly; the default 'control-group' would SIGTERM a running dosemu child
+# mid-game instead of letting the daemon finish the turn it is processing.
+KillMode=mixed
+TimeoutStopSec=30
+
+# Straight to journald, which the otel-collector's journald receiver already
+# ships to OpenObserve. SyslogIdentifier keeps the stream readable there.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nova-client
+
+# Conservative hardening only, and deliberately so. dosemu2 is fragile about
+# its environment - it needs /dev access, a writable tmp, and a TERM that can
+# position the cursor. ProtectSystem=strict, PrivateDevices, PrivateTmp and
+# MemoryDenyWriteExecute have all been left OFF on purpose: the failure mode
+# they produce is a game that silently stops processing turns, which is a
+# miserable thing to debug. Do not tighten these without testing a real
+# PLANETARY run afterwards.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

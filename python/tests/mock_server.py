@@ -6,6 +6,7 @@ uses, allowing integration tests to run without a real server.
 API matches: /service/api/v1/...
 """
 
+import hashlib
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -384,6 +385,7 @@ async def download_packet(
 @service_app.get("/leagues/{league_id}/nodelist")
 async def download_nodelist(
     league_id: str = PathParam(..., pattern=r'^\d{3}[BF]$'),
+    request: Request = None,
     client_info: dict = Depends(verify_token),
 ):
     """Download nodelist for a league."""
@@ -407,10 +409,28 @@ async def download_nodelist(
     prefix = "BR" if league_game_type == "B" else "FE"
     filename = f"{prefix}NODES.{league_number}"
 
+    # Mirrors the real hub: ETag plus 304 on a matching If-None-Match. Clients
+    # poll far more often than nodelists change, so this is the path they take
+    # almost every cycle and the mock has to cover it.
+    content = storage.nodelists[league_id.upper()]
+    etag = f'"{hashlib.md5(content).hexdigest()}"'
+
+    if_none_match = request.headers.get("if-none-match") if request else None
+    if if_none_match:
+        candidates = {
+            tag.strip().removeprefix("W/").strip('"')
+            for tag in if_none_match.split(",")
+        }
+        if "*" in candidates or etag.strip('"') in candidates:
+            return Response(status_code=304, headers={"ETag": etag})
+
     return Response(
-        content=storage.nodelists[league_id.upper()],
+        content=content,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "ETag": etag,
+        },
     )
 
 

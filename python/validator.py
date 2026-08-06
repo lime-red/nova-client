@@ -9,6 +9,8 @@ Validates:
 """
 
 import os
+import platform
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -73,10 +75,23 @@ class ClientValidator:
         """Validate that a directory exists"""
         path = Path(dir_path)
         if not path.exists():
+            hint = ""
+            # A DOS path on Linux is the classic misconfiguration: game_folder
+            # must be the path the *host* can open (the directory dosemu
+            # presents as C:), while game_dos_path carries the DOS spelling.
+            # Without this hint the message reads as a missing directory when
+            # it is really the wrong kind of path, and no amount of mkdir helps.
+            if platform.system() != "Windows" and re.match(r"^[A-Za-z]:[\\/]", str(dir_path)):
+                hint = (
+                    f" - that is a DOS path, but {dir_type} must be a path this"
+                    " machine can open. On Linux use the directory dosemu"
+                    " presents as C: (e.g. /home/you/.dosemu/drive_c/bbs/...)"
+                    " and put the DOS spelling in game_dos_path."
+                )
             self.errors.append(
                 ValidationError(
                     "Directory",
-                    f"{league_key}: {dir_type} directory does not exist: {dir_path}"
+                    f"{league_key}: {dir_type} directory does not exist: {dir_path}{hint}"
                 )
             )
             return False

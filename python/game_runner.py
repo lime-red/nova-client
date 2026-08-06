@@ -8,6 +8,7 @@ with automatic queuing.
 """
 
 import asyncio
+import os
 import platform
 import sys
 from dataclasses import dataclass, field
@@ -310,15 +311,22 @@ class GameRunner:
         dosemu_path = daemon_config.get("dosemu_path", "/usr/bin/dosemu")
         dosemu_config_dir = daemon_config.get("dosemu_config_dir", "./dosemu_configs")
 
-        game_folder = Path(league_config["game_folder"])
+        # Absolute too, for the same reason: it becomes the subprocess cwd.
+        game_folder = Path(league_config["game_folder"]).resolve()
         game_dos_path = league_config.get("game_dos_path", "C:\\GAMES\\BRE")
         game_command = league_config.get("game_command", game_type)
         maintenance_args = league_config.get("maintenance_args", "PLANETARY")
 
         full_command = f"{game_command} {maintenance_args}"
 
-        # Ensure config directory exists
-        config_dir = Path(dosemu_config_dir)
+        # These paths are resolved to absolute deliberately. dosemu_config_dir
+        # and log_dir default to "./..." - relative to the daemon's working
+        # directory - but the subprocess below runs with cwd=game_folder,
+        # because the game must be started from its own directory. A relative
+        # path therefore lands somewhere entirely different, and script(1) dies
+        # with "cannot open logs/...: No such file or directory" and exit 1
+        # before dosemu is ever reached, leaving no log to explain why.
+        config_dir = Path(dosemu_config_dir).resolve()
         config_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate dosemu config
@@ -330,7 +338,7 @@ class GameRunner:
         self._create_batch_file(batch_file, full_command, game_dos_path)
 
         # Prepare log file for output capture
-        log_dir = Path(daemon_config.get("log_dir", "./logs"))
+        log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"{game_type}_{league_id}_{timestamp}.log"
@@ -348,11 +356,23 @@ class GameRunner:
             dosemu_cmd = " ".join([shlex.quote(str(c)) for c in cmd])
             script_cmd = ["script", "-c", dosemu_cmd, str(log_file)]
 
+            # dosemu2 refuses to start unless TERM names a terminal that can
+            # clear the screen and position the cursor. Under systemd there is
+            # no controlling terminal, so script(1) sets TERM=dumb and dosemu
+            # exits 1 with "Your terminal lacks the ability to clear the
+            # screen", leaving a ~330-byte log. Pin TERM, the same way
+            # nova-hub's DosemuRunner does - this is that identical bug, and it
+            # only shows up once the daemon runs as a service rather than from
+            # a shell. A healthy log is ~19-26 KB with the FDPP kernel banner.
+            env = os.environ.copy()
+            env["TERM"] = daemon_config.get("dosemu_term", "linux")
+
             process = await asyncio.create_subprocess_exec(
                 *script_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(game_folder),
+                env=env,
             )
 
             try:
@@ -365,25 +385,86 @@ class GameRunner:
                 await process.wait()
                 raise
 
-            # Read output from log file
-            output = ""
-            if log_file.exists():
-                output = log_file.read_text(errors='replace')
+            # script(1) merges its own stderr into what we capture here. That
+            # is the ONLY place a failure to even start the transcript shows up
+            # - "cannot open logs/...: No such file or directory" and the like.
+            # It used to be captured and then dropped, so the single line that
+            # explained the failure never reached the journal and there was no
+            # log file to find it in either. Keep it.
+            captured = stdout.decode(errors="replace").strip() if stdout else ""
 
             return_code = process.returncode if process.returncode is not None else -1
+
+            # On success the transcript is the log file; script also echoes it
+            # to stdout, so prefer the file and ignore the duplicate.
+            output = ""
+            if log_file.exists():
+                output = log_file.read_text(errors="replace")
+            elif captured:
+                output = captured
+
+            error = ""
+            if return_code != 0:
+                error = self._describe_failure(return_code, log_file, captured, output)
+
+            if return_code == 0:
+                self.log("DEBUG", f"dosemu transcript: {log_file} ({len(output)} bytes)")
+
             return GameRunResult(
                 success=return_code == 0,
                 game_type="",
                 league_id="",
                 command="",
                 output=output,
-                error="" if return_code == 0 else f"Exit code: {return_code}",
+                error=error,
                 return_code=return_code
             )
 
         finally:
             # Cleanup batch file
             batch_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _describe_failure(
+        return_code: int, log_file: Path, captured: str, output: str
+    ) -> str:
+        """Build an error line that says what actually went wrong.
+
+        This ends up in the daemon's ERROR line and therefore in the journal,
+        which is usually the only thing anyone reads. A bare "Exit code: 1" -
+        which is all this used to say - sends you looking for a log that in the
+        worst case does not exist, because not being able to write it was the
+        failure.
+        """
+        parts = [f"Exit code: {return_code}"]
+
+        if not log_file.exists():
+            # Diagnostic in itself: script never got as far as a transcript.
+            parts.append(f"no transcript written to {log_file}")
+        else:
+            parts.append(f"transcript: {log_file}")
+            # dosemu2 refusing to start leaves a ~330-byte log; a healthy run is
+            # 19-26 KB. Size alone tells you which you are looking at.
+            size = log_file.stat().st_size
+            if size < 1024:
+                parts.append(f"transcript is only {size} bytes, so dosemu likely never booted")
+
+        # script's own stderr first - that is the direct cause when there is
+        # one. Otherwise the tail of the transcript, where dosemu says why.
+        source = captured if captured else output
+        lines = [ln.strip() for ln in source.splitlines() if ln.strip()]
+        # script's own bookkeeping says nothing about the failure.
+        lines = [
+            ln for ln in lines
+            if not ln.startswith("Script started") and ln != "Script done."
+        ]
+        # Collapsed onto one line: journald splits on newlines, and a failure
+        # split across several entries is much harder to read than one long one.
+        detail = " | ".join(lines[-3:])
+        if detail:
+            parts.append(detail[:500])
+
+        return " - ".join(parts)
 
     def _write_dosemu_config(self, conf_file: Path):
         """Write dosemu configuration file"""

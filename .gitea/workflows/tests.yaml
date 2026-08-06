@@ -2,8 +2,11 @@ name: Nova Client Tests
 on: [push, pull_request]
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -20,5 +23,33 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run tests
+        run: pytest
+
+  powershell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python (for the mock hub the Pester tests run against)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install mock server dependencies
         run: |
-          pytest
+          python -m pip install --upgrade pip
+          pip install -r python/requirements.txt -r python/requirements-dev.txt
+
+      # PSScriptAnalyzer catches the class of bug that killed the old
+      # run_nova_cycle.ps1: assigning to $matches, which the -match operator
+      # silently clobbers. Worth having even though only the PS7 script can
+      # actually be executed on Linux.
+      - name: Lint and test with PowerShell
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+          Invoke-ScriptAnalyzer -Path powershell -Recurse -Severity Error, Warning -EnableExit
+          Invoke-Pester -Path powershell/tests -CI

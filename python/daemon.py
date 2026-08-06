@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 
 import toml
 
+from _version import __version__
 from client import NovaHubClient
 from game_runner import GameRunner, GameRunResult
 
@@ -93,6 +94,9 @@ class NovaDaemon:
         daemon.setdefault("run_maintenance_on_download", True)
         daemon.setdefault("dosemu_path", "/usr/bin/dosemu")
         daemon.setdefault("dosemu_config_dir", "./dosemu_configs")
+        # dosemu2 will not start under TERM=dumb, which is what script(1)
+        # supplies when the daemon runs as a service. See game_runner.py.
+        daemon.setdefault("dosemu_term", "linux")
         daemon.setdefault("log_dir", "./logs")
 
         return config
@@ -105,7 +109,7 @@ class NovaDaemon:
     async def run(self):
         """Main daemon loop"""
         self.stats["start_time"] = datetime.now().isoformat()
-        self.log("INFO", "Nova Client Daemon starting")
+        self.log("INFO", f"Nova Client Daemon {__version__} starting")
         self.log("INFO", f"BBS: {self.config.get('bbs', {}).get('name', 'Unknown')}")
         self.log("INFO", f"Hub: {self.config.get('hub', {}).get('url', 'Unknown')}")
 
