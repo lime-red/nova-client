@@ -5,7 +5,7 @@ All notable changes to Nova Client are documented here.
 Versions before 0.2.0 were never tagged; 0.2.0 was applied retroactively to the last
 Python-only release, which is the code that had been running in production.
 
-## [0.3.0] — 2026-08-05
+## [0.3.0] — 2026-08-06
 
 Nova Client becomes multi-language. The Python client is unchanged in behaviour but has
 moved; a PowerShell client is added for Windows nodes that would rather not install Python.
