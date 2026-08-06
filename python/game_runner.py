@@ -311,15 +311,22 @@ class GameRunner:
         dosemu_path = daemon_config.get("dosemu_path", "/usr/bin/dosemu")
         dosemu_config_dir = daemon_config.get("dosemu_config_dir", "./dosemu_configs")
 
-        game_folder = Path(league_config["game_folder"])
+        # Absolute too, for the same reason: it becomes the subprocess cwd.
+        game_folder = Path(league_config["game_folder"]).resolve()
         game_dos_path = league_config.get("game_dos_path", "C:\\GAMES\\BRE")
         game_command = league_config.get("game_command", game_type)
         maintenance_args = league_config.get("maintenance_args", "PLANETARY")
 
         full_command = f"{game_command} {maintenance_args}"
 
-        # Ensure config directory exists
-        config_dir = Path(dosemu_config_dir)
+        # These paths are resolved to absolute deliberately. dosemu_config_dir
+        # and log_dir default to "./..." - relative to the daemon's working
+        # directory - but the subprocess below runs with cwd=game_folder,
+        # because the game must be started from its own directory. A relative
+        # path therefore lands somewhere entirely different, and script(1) dies
+        # with "cannot open logs/...: No such file or directory" and exit 1
+        # before dosemu is ever reached, leaving no log to explain why.
+        config_dir = Path(dosemu_config_dir).resolve()
         config_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate dosemu config
@@ -331,7 +338,7 @@ class GameRunner:
         self._create_batch_file(batch_file, full_command, game_dos_path)
 
         # Prepare log file for output capture
-        log_dir = Path(daemon_config.get("log_dir", "./logs"))
+        log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"{game_type}_{league_id}_{timestamp}.log"

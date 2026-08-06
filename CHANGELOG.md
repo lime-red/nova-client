@@ -55,6 +55,12 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   client did. Python failed the whole file, blocking `--validate` on a live node; PowerShell
   skipped the entry with no message at all, which is why it looked fine. Both now take the
   first token, and Python records the routing targets like the hub does.
+- **Fixed: Linux maintenance never ran — `script(1)` died before dosemu started (Python).**
+  `dosemu_config_dir` and `log_dir` default to `./...`, relative to the daemon's working
+  directory, but the subprocess runs with `cwd=game_folder` because BRE/FE must start from
+  their own directory. So `script` looked for `logs/` *inside the game folder*, failed with
+  `cannot open logs/...: No such file or directory`, and exited 1 — instantly, and with no log
+  to explain it. All three paths are resolved to absolute now.
 - **UNC path rejection (PowerShell).** `-Validate` now fails a `GameFolder` under `\\server\share`
   and warns for inbound/outbound directories. BRE and FE are DOS programs and DOS has no
   concept of UNC, so the game cannot run from one however happily PowerShell reads it. This
