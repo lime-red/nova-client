@@ -8,6 +8,7 @@ with automatic queuing.
 """
 
 import asyncio
+import os
 import platform
 import sys
 from dataclasses import dataclass, field
@@ -348,11 +349,23 @@ class GameRunner:
             dosemu_cmd = " ".join([shlex.quote(str(c)) for c in cmd])
             script_cmd = ["script", "-c", dosemu_cmd, str(log_file)]
 
+            # dosemu2 refuses to start unless TERM names a terminal that can
+            # clear the screen and position the cursor. Under systemd there is
+            # no controlling terminal, so script(1) sets TERM=dumb and dosemu
+            # exits 1 with "Your terminal lacks the ability to clear the
+            # screen", leaving a ~330-byte log. Pin TERM, the same way
+            # nova-hub's DosemuRunner does - this is that identical bug, and it
+            # only shows up once the daemon runs as a service rather than from
+            # a shell. A healthy log is ~19-26 KB with the FDPP kernel banner.
+            env = os.environ.copy()
+            env["TERM"] = daemon_config.get("dosemu_term", "linux")
+
             process = await asyncio.create_subprocess_exec(
                 *script_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=str(game_folder),
+                env=env,
             )
 
             try:

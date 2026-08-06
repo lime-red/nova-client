@@ -26,6 +26,12 @@ run_maintenance_on_download = true # run maintenance immediately when packets ar
 # Linux-only: dosemu configuration
 dosemu_path = "/usr/bin/dosemu"
 dosemu_config_dir = "./dosemu_configs"
+
+# dosemu2 refuses to start unless TERM names a terminal that can clear the
+# screen. Under systemd there is no controlling terminal, so script(1) sets
+# TERM=dumb and dosemu exits immediately leaving a ~330-byte log. Leave this
+# alone unless you have a reason.
+dosemu_term = "linux"
 log_dir = "./logs"
 
 # Define your leagues here
@@ -39,13 +45,26 @@ outbound_dir = "./test_data/bre_555/outbound"
 inbound_dir = "./test_data/bre_555/inbound"
 
 # Game execution settings (required for daemon mode)
-game_folder = "C:\\BBS\\BRE"              # Windows path to game folder
-# game_folder = "/home/user/.dosemu/drive_c/BBS/BRE"  # Linux path alternative
+#
+# game_folder is ALWAYS a path this machine can open - a real path on the
+# host OS. On Linux that is the directory dosemu presents as C:, NOT the
+# DOS path. Putting a "C:\..." path here on Linux is the easy mistake:
+# nothing can stat it, so maintenance fails with "game_folder does not
+# exist" and never launches dosemu at all.
+#
+# On Windows:
+game_folder = "C:\\BBS\\BRE"
+#
+# On Linux, the host path and the DOS path are two different settings:
+# game_folder   = "/home/user/.dosemu/drive_c/bbs/bre"   # what Linux sees
+# game_dos_path = "C:\\BBS\\BRE"                         # what DOS sees
+#
+# game_dos_path is Linux-only; it is written into the generated batch file
+# as the CD target and is ignored on Windows.
+game_dos_path = "C:\\BBS\\BRE"
+
 game_command = "BRE"                       # Executable name (without path)
 maintenance_args = "PLANETARY"             # Arguments for maintenance command
-
-# Linux-only: DOS path mapping (for dosemu)
-game_dos_path = "C:\\BBS\\BRE"             # DOS path as seen inside dosemu
 
 # Example Falcon's Eye league configuration
 [leagues.FE.123]

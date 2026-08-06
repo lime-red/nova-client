@@ -94,6 +94,9 @@ class NovaDaemon:
         daemon.setdefault("run_maintenance_on_download", True)
         daemon.setdefault("dosemu_path", "/usr/bin/dosemu")
         daemon.setdefault("dosemu_config_dir", "./dosemu_configs")
+        # dosemu2 will not start under TERM=dumb, which is what script(1)
+        # supplies when the daemon runs as a service. See game_runner.py.
+        daemon.setdefault("dosemu_term", "linux")
         daemon.setdefault("log_dir", "./logs")
 
         return config
