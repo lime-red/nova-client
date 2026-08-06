@@ -565,8 +565,20 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
                 $output | Should -Not -Match 'Daemon cycle error'
                 $output | Should -Not -Match 'Unhandled error'
                 # Prove it actually looped rather than dying quietly.
-                ([regex]::Matches($output, 'Run Summary')).Count |
-                    Should -BeGreaterThan 1 -Because 'the daemon should complete repeated cycles'
+                $cycles = ([regex]::Matches($output, 'Run Summary')).Count
+                $cycles | Should -BeGreaterThan 1 -Because 'the daemon should complete repeated cycles'
+
+                # The startup banner belongs to the process, not the cycle. It
+                # was inside the sync pass, so a daemon reintroduced itself every
+                # couple of minutes and the log read like a series of restarts.
+                ([regex]::Matches($output, 'Nova Hub Client .* starting')).Count |
+                    Should -Be 1 -Because 'the banner should print once per process'
+
+                # The token is good for 24 hours. Invoke-NovaSync used to pass
+                # -Force, so every cycle re-authenticated - the cache existed but
+                # nothing ever hit it.
+                ([regex]::Matches($output, 'OAuth token obtained')).Count |
+                    Should -Be 1 -Because 'the token should be cached across cycles'
             }
             finally {
                 Stop-Job $job -ErrorAction SilentlyContinue

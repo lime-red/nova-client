@@ -37,6 +37,12 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
     still never rewritten and never logged at INFO. The ETag lives in `nodelist-etags.json`
     beside `metrics.json`, deliberately not in the game folder.
   - `'never'` — rely purely on the packet queue.
+- **Fixed: the daemon re-authenticated and reprinted its banner every cycle (PowerShell).**
+  `Invoke-NovaSync` passed `-Force` to the token fetch, so the cache existed but nothing ever
+  hit it — a token good for 24 hours was refetched every two minutes, exactly the behaviour
+  the cache was added to avoid. The startup banner lived in the sync pass too, so a daemon
+  reintroduced itself every cycle and the log read like a series of restarts. The banner now
+  prints once per process.
 - **Fixed: `-Daemon` threw on every cycle before maintenance had run once (PowerShell).** The
   sleep calculation used `[Math]::Max(1, $wait)`, and until `$lastMaintenance` was set it was
   about -6.4e10 — correct, meaning "long overdue", but the literal `1` selected the `Int32`
@@ -85,8 +91,8 @@ These are deliberate improvements, not translation drift:
 - **Atomic downloads.** Packets are written to `<name>.part` and renamed into place only once
   complete. The Python client writes directly, so a crash mid-write can leave a truncated
   packet that the game then treats as real data.
-- **Token caching and refresh.** The token is reused across sync cycles and refreshed before
-  expiry, or once on a `401`. The Python daemon re-authenticates every cycle.
+- **Token caching and refresh.** The token is reused across sync cycles and refreshed a minute
+  before expiry, or once on a `401`. The Python daemon re-authenticates every cycle.
 - **Retries cover more.** Transport failures, `5xx` and `429` are retried; `4xx` are not,
   because they are configuration errors that will fail identically forever. The Python client
   retries only transport exceptions, so a `502` from a restarting hub fails the whole packet.

@@ -934,11 +934,11 @@ function Invoke-NovaSync {
         success          = $true
     }
 
-    Write-NovaLog INFO "Nova Hub Client $Script:NovaClientVersion starting"
-    Write-NovaLog INFO "BBS: $(Get-NovaSetting $Cfg 'Bbs.Name' '(unnamed)')"
-    Write-NovaLog INFO "Hub: $(Get-NovaSetting $Cfg 'Hub.Url')"
-
-    if ($null -eq (Get-NovaToken -Cfg $Cfg -Force)) {
+    # No -Force. The token is good for 24 hours, so re-authenticating every
+    # cycle just to say "OAuth token obtained" again is pointless chatter and a
+    # pointless round trip - and Invoke-NovaApi already re-auths once on a 401,
+    # which is the case that actually matters.
+    if ($null -eq (Get-NovaToken -Cfg $Cfg)) {
         Write-NovaLog ERROR 'Authentication failed; no leagues will be synced'
         return Complete-NovaRun -Cfg $Cfg
     }
@@ -1295,7 +1295,8 @@ function Start-NovaDaemon {
     $maintInterval = [int](Get-NovaSetting $Cfg 'Daemon.MaintenanceIntervalSeconds' 600)
     $maintOnDownload = [bool](Get-NovaSetting $Cfg 'Daemon.RunMaintenanceOnDownload' $true)
 
-    Write-NovaLog INFO "Nova Client daemon $Script:NovaClientVersion starting"
+    # The version and hub are already on the startup banner in Invoke-NovaMain.
+    Write-NovaLog INFO 'Daemon mode'
     Write-NovaLog INFO "Sync every ${syncInterval}s, maintenance every ${maintInterval}s"
     Write-NovaLog INFO "Run maintenance on download: $maintOnDownload"
     Write-NovaLog INFO 'Press Ctrl+C to stop'
@@ -1418,6 +1419,13 @@ function Invoke-NovaMain {
         return 2
     }
     foreach ($warning in $validation.Warnings) { Write-NovaLog WARN $warning }
+
+    # Printed once per process, not once per sync. It used to live in
+    # Invoke-NovaSync, so a daemon reintroduced itself every couple of minutes
+    # and the log read like a series of restarts.
+    Write-NovaLog INFO "Nova Hub Client $Script:NovaClientVersion starting"
+    Write-NovaLog INFO "BBS: $(Get-NovaSetting $cfg 'Bbs.Name' '(unnamed)')"
+    Write-NovaLog INFO "Hub: $(Get-NovaSetting $cfg 'Hub.Url')"
 
     # One instance per config file. The Python client has no such guard, and two
     # daemons against one config will both claim the same packets and both try
