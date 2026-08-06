@@ -1207,8 +1207,13 @@ function Test-NovaNodesFile {
     foreach ($line in @($lines) + @('')) {
         if ([string]::IsNullOrWhiteSpace($line)) {
             if ($buffer.Count -ge 2) {
+                # The index line may carry routing info: "1 HOST 2 3 4", which
+                # is how the hub's own entry is written. Parsing the whole line
+                # as an integer fails and silently drops that node - so take the
+                # first token. nova-hub's nodes_parser.py does the same.
                 $index = 0
-                if ([int]::TryParse($buffer[0].Trim(), [ref]$index)) {
+                $indexToken = ($buffer[0].Trim() -split '\s+')[0]
+                if ([int]::TryParse($indexToken, [ref]$index)) {
                     if ($entries.ContainsKey($index)) {
                         $null = $Problems.Add("${label}: duplicate BBS index $index in $($nodesFile.Name)")
                     }

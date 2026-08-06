@@ -49,6 +49,12 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   overload and the conversion threw. The daemon's own error handling caught it, so packets kept
   moving and only an error line every cycle gave it away. Clamped with plain comparisons now,
   keeping everything `[double]` until one cast at the end.
+- **Fixed: nodes.dat entries with `HOST` routing were rejected (Python) or silently dropped
+  (PowerShell).** The index line may read `1 HOST 2 3 4`, which is how the hub writes its own
+  entry — so every real nodelist has one. `nova-hub`'s parser has always handled it; neither
+  client did. Python failed the whole file, blocking `--validate` on a live node; PowerShell
+  skipped the entry with no message at all, which is why it looked fine. Both now take the
+  first token, and Python records the routing targets like the hub does.
 - **UNC path rejection (PowerShell).** `-Validate` now fails a `GameFolder` under `\\server\share`
   and warns for inbound/outbound directories. BRE and FE are DOS programs and DOS has no
   concept of UNC, so the game cannot run from one however happily PowerShell reads it. This

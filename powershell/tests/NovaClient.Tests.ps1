@@ -104,8 +104,12 @@ BeforeAll {
             $null = New-Item -ItemType Directory -Path $dir -Force
         }
 
-        # 6 lines per entry then a blank line: index, name, fido, city, state, country
+        # 6 lines per entry then a blank line: index, name, fido, city, state, country.
+        # The hub's own entry leads with "1 HOST ..." routing info, exactly as a
+        # real nodelist does - the fixture used to omit it, which is why the
+        # parser could drop that line unnoticed.
         @(
+            '1 HOST 2 3 4', 'Nova Hub', '135:1/1', 'Brisbane', 'QLD', 'AUS', ''
             "$BbsIndex", $BbsName, '1:2/3', 'Somewhere', 'Somestate', 'Somewhere', ''
         ) | Set-Content -LiteralPath (Join-Path $game 'BRNODES.DAT')
 
@@ -314,6 +318,40 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
             $r.ExitCode | Should -Be 2
             $r.Output | Should -Match 'more than one league'
+        }
+
+        It 'reads a nodes.dat whose index line carries HOST routing' {
+            # "1 HOST 2 3 4" is how the hub's own entry is written, so it is in
+            # every real nodelist. Parsing the whole line as an integer fails,
+            # and this parser then skipped the entry *silently* - so the only
+            # symptom was a node quietly missing from the table.
+            #
+            # OUR index sits behind the HOST line here on purpose. With it on
+            # someone else's entry the old code still passed, because nothing
+            # afterwards asked about that node - which is exactly why this went
+            # unnoticed on a real box.
+            $nodes = Join-Path $Script:Ws.Game 'BRNODES.DAT'
+            @(
+                '1', 'Nova Hub', '135:1/1', 'Brisbane', 'QLD', 'AUS', ''
+                '2 HOST 3 4', 'Test BBS', '1:2/3', 'Somewhere', 'Somestate', 'Somewhere', ''
+            ) | Set-Content -LiteralPath $nodes
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Not -Match 'no entry in'
+        }
+
+        It 'still catches a duplicate index behind a HOST line' {
+            # Taking the first token must not turn into ignoring the line.
+            $nodes = Join-Path $Script:Ws.Game 'BRNODES.DAT'
+            @(
+                '2 HOST 3 4', 'Impostor', '135:1/1', 'Brisbane', 'QLD', 'AUS', ''
+                '2', 'Test BBS', '1:2/3', 'Somewhere', 'Somestate', 'Somewhere', ''
+            ) | Set-Content -LiteralPath $nodes
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 2
+            $r.Output | Should -Match 'duplicate BBS index 2'
         }
 
         It 'rejects a UNC GameFolder, which the DOS game cannot use' {

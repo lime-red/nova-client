@@ -3,16 +3,23 @@ Parser for BRE/FE nodes.dat files
 
 File format:
 Each BBS entry consists of 6 lines followed by a blank line:
-1. BBS index (integer)
+1. BBS index (integer), optionally followed by routing info: "{index} HOST {node} {node}..."
 2. BBS name (string)
 3. FidoNet address (string, format: zone:net/node)
 4. City (string)
 5. State/Province (string)
 6. Country (string)
 7. Blank line (separator)
+
+The routing format on line 1 is: "{int} HOST {int} {int}..."
+where the first integer is the BBS index and subsequent integers are routing targets.
+
+Kept deliberately in step with nova-hub's backend/services/nodes_parser.py - the
+two read the same files, and a client that rejects what the hub accepts just
+blocks a node from starting.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -27,6 +34,7 @@ class BBSNode:
     state: str
     country: str
     line_number: int  # Track where this entry started in the file
+    routing_targets: List[int] = field(default_factory=list)  # From "N HOST x y z" format
 
 
 class NodesFileParser:
@@ -74,19 +82,32 @@ class NodesFileParser:
 
             # Parse the 6 fields
             try:
-                bbs_index_str = lines[i].strip()
+                index_line = lines[i].strip()
                 bbs_name = lines[i + 1].strip()
                 fidonet_address = lines[i + 2].strip()
                 city = lines[i + 3].strip()
                 state = lines[i + 4].strip()
                 country = lines[i + 5].strip()
 
+                # Parse BBS index line - may include routing info:
+                #   plain:   "1"
+                #   routing: "1 HOST 2 3"
+                routing_targets: List[int] = []
+                tokens = index_line.split()
+                bbs_index_str = tokens[0] if tokens else index_line
+                if len(tokens) >= 3 and tokens[1].upper() == "HOST":
+                    for tok in tokens[2:]:
+                        try:
+                            routing_targets.append(int(tok))
+                        except ValueError:
+                            pass  # skip malformed routing tokens
+
                 # Validate bbs_index is an integer
                 try:
                     bbs_index = int(bbs_index_str)
                 except ValueError:
                     self.errors.append(
-                        f"Line {start_line}: Invalid BBS index '{bbs_index_str}' (must be an integer)"
+                        f"Line {start_line}: Invalid BBS index '{index_line}' (must be an integer)"
                     )
                     i += 6
                     continue
@@ -112,7 +133,8 @@ class NodesFileParser:
                     city=city,
                     state=state,
                     country=country,
-                    line_number=start_line
+                    line_number=start_line,
+                    routing_targets=routing_targets,
                 )
                 self.nodes.append(node)
                 entry_count += 1
