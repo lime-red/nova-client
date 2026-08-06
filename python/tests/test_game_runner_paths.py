@@ -146,3 +146,88 @@ def test_every_path_in_the_command_is_absolute(workspace, monkeypatch):
                 "/" in token and not token.startswith("/")
             ):
                 pytest.fail(f"relative path passed to a subprocess with a different cwd: {token}")
+
+
+# --- Failure reporting ------------------------------------------------------
+# script(1) merges its stderr into what we capture. That was captured and then
+# dropped, so a run that failed before writing a transcript reported only
+# "Exit code: 1" - no reason, and no log to look in, because being unable to
+# write the log WAS the reason. The daemon puts result.error straight into its
+# ERROR line, so whatever lands here is what reaches the journal.
+
+
+def test_failure_says_when_no_transcript_was_written(tmp_path):
+    missing = tmp_path / "logs" / "BRE_015.log"
+    error = GameRunner._describe_failure(
+        1, missing, "script: cannot open logs/BRE_015.log: No such file or directory", ""
+    )
+
+    assert "Exit code: 1" in error
+    assert "no transcript written" in error
+    assert "cannot open" in error, "script's own stderr must survive into the error"
+
+
+def test_failure_quotes_the_tail_of_the_transcript(tmp_path):
+    log = tmp_path / "run.log"
+    log.write_text(
+        "Script started\n"
+        "\n"
+        "ERROR: KVM: error opening /dev/kvm\n"
+        "Your terminal lacks the ability to clear the screen\n"
+    )
+    error = GameRunner._describe_failure(1, log, "", log.read_text())
+
+    assert "terminal lacks the ability" in error
+    assert str(log) in error
+
+
+def test_short_transcript_is_called_out_as_a_dead_dosemu(tmp_path):
+    """~330 bytes means dosemu never booted; a healthy run is 19-26 KB."""
+    log = tmp_path / "run.log"
+    log.write_text("x" * 330)
+    error = GameRunner._describe_failure(1, log, "", log.read_text())
+
+    assert "never booted" in error
+
+
+def test_healthy_sized_transcript_is_not_called_dead(tmp_path):
+    log = tmp_path / "run.log"
+    log.write_text("y" * 20_000)
+    error = GameRunner._describe_failure(1, log, "", log.read_text())
+
+    assert "never booted" not in error
+
+
+def test_detail_is_truncated(tmp_path):
+    """A 26 KB transcript must not be pasted wholesale into a journal line."""
+    log = tmp_path / "run.log"
+    log.write_text("z" * 20_000)
+    error = GameRunner._describe_failure(1, log, "q" * 20_000, log.read_text())
+
+    assert len(error) < 800
+
+
+def test_detail_is_one_line(tmp_path):
+    """journald splits on newlines; a failure spread over several entries is
+    much harder to read than one long one."""
+    log = tmp_path / "run.log"
+    log.write_text("first line\nsecond line\nthird line\n")
+    error = GameRunner._describe_failure(1, log, "", log.read_text())
+
+    assert "\n" not in error
+    assert "second line | third line" in error
+
+
+def test_script_boilerplate_is_dropped(tmp_path):
+    """'Script started/done' is script(1) bookkeeping and says nothing."""
+    missing = tmp_path / "logs" / "run.log"
+    captured = (
+        "Script started, output log file is 'run.log'.\n"
+        "script: cannot open run.log: Permission denied\n"
+        "Script done.\n"
+    )
+    error = GameRunner._describe_failure(1, missing, captured, "")
+
+    assert "Script started" not in error
+    assert "Script done" not in error
+    assert "Permission denied" in error

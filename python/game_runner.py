@@ -385,25 +385,86 @@ class GameRunner:
                 await process.wait()
                 raise
 
-            # Read output from log file
-            output = ""
-            if log_file.exists():
-                output = log_file.read_text(errors='replace')
+            # script(1) merges its own stderr into what we capture here. That
+            # is the ONLY place a failure to even start the transcript shows up
+            # - "cannot open logs/...: No such file or directory" and the like.
+            # It used to be captured and then dropped, so the single line that
+            # explained the failure never reached the journal and there was no
+            # log file to find it in either. Keep it.
+            captured = stdout.decode(errors="replace").strip() if stdout else ""
 
             return_code = process.returncode if process.returncode is not None else -1
+
+            # On success the transcript is the log file; script also echoes it
+            # to stdout, so prefer the file and ignore the duplicate.
+            output = ""
+            if log_file.exists():
+                output = log_file.read_text(errors="replace")
+            elif captured:
+                output = captured
+
+            error = ""
+            if return_code != 0:
+                error = self._describe_failure(return_code, log_file, captured, output)
+
+            if return_code == 0:
+                self.log("DEBUG", f"dosemu transcript: {log_file} ({len(output)} bytes)")
+
             return GameRunResult(
                 success=return_code == 0,
                 game_type="",
                 league_id="",
                 command="",
                 output=output,
-                error="" if return_code == 0 else f"Exit code: {return_code}",
+                error=error,
                 return_code=return_code
             )
 
         finally:
             # Cleanup batch file
             batch_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _describe_failure(
+        return_code: int, log_file: Path, captured: str, output: str
+    ) -> str:
+        """Build an error line that says what actually went wrong.
+
+        This ends up in the daemon's ERROR line and therefore in the journal,
+        which is usually the only thing anyone reads. A bare "Exit code: 1" -
+        which is all this used to say - sends you looking for a log that in the
+        worst case does not exist, because not being able to write it was the
+        failure.
+        """
+        parts = [f"Exit code: {return_code}"]
+
+        if not log_file.exists():
+            # Diagnostic in itself: script never got as far as a transcript.
+            parts.append(f"no transcript written to {log_file}")
+        else:
+            parts.append(f"transcript: {log_file}")
+            # dosemu2 refusing to start leaves a ~330-byte log; a healthy run is
+            # 19-26 KB. Size alone tells you which you are looking at.
+            size = log_file.stat().st_size
+            if size < 1024:
+                parts.append(f"transcript is only {size} bytes, so dosemu likely never booted")
+
+        # script's own stderr first - that is the direct cause when there is
+        # one. Otherwise the tail of the transcript, where dosemu says why.
+        source = captured if captured else output
+        lines = [ln.strip() for ln in source.splitlines() if ln.strip()]
+        # script's own bookkeeping says nothing about the failure.
+        lines = [
+            ln for ln in lines
+            if not ln.startswith("Script started") and ln != "Script done."
+        ]
+        # Collapsed onto one line: journald splits on newlines, and a failure
+        # split across several entries is much harder to read than one long one.
+        detail = " | ".join(lines[-3:])
+        if detail:
+            parts.append(detail[:500])
+
+        return " - ".join(parts)
 
     def _write_dosemu_config(self, conf_file: Path):
         """Write dosemu configuration file"""

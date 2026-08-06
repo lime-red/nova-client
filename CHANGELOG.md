@@ -61,6 +61,12 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   their own directory. So `script` looked for `logs/` *inside the game folder*, failed with
   `cannot open logs/...: No such file or directory`, and exited 1 — instantly, and with no log
   to explain it. All three paths are resolved to absolute now.
+- **Maintenance failures now say why (Python).** `script(1)`'s output was captured and then
+  discarded, so a failed run reported only `Exit code: 1` — with no log to consult, because
+  being unable to write the log was often the failure itself. The error now carries script's
+  own stderr (or the tail of the transcript), names the transcript path, and flags a
+  suspiciously small transcript as dosemu never having booted. Collapsed to a single line,
+  since journald splits on newlines. The daemon already forwards this to the journal.
 - **UNC path rejection (PowerShell).** `-Validate` now fails a `GameFolder` under `\\server\share`
   and warns for inbound/outbound directories. BRE and FE are DOS programs and DOS has no
   concept of UNC, so the game cannot run from one however happily PowerShell reads it. This
