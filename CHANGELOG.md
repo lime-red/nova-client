@@ -16,10 +16,15 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   - `NovaClient-WinPS5.ps1` for Windows PowerShell 5.1 — needs nothing installed.
   - `NovaClient-PS7.ps1` for PowerShell 7+.
 
-  Both are self-contained single files at full parity with the Python client: one-shot sync,
-  continuous daemon with independent sync and maintenance schedules, game maintenance, and
-  configuration validation. They are byte-identical below their `HTTP TRANSPORT` section; a
-  test enforces that.
+  Full parity with the Python client: one-shot sync, continuous daemon with independent sync
+  and maintenance schedules, game maintenance, and configuration validation.
+
+  Each of those files holds only its own HTTP layer — the one place 5.1 and 7 genuinely
+  differ. Everything else lives once in `NovaClient.Common.ps1`, dot-sourced by both, so
+  **the whole `powershell/` folder must be deployed together**; a launcher alone exits 2 with
+  an explanation. `NovaClient.Common.ps1` is held to Windows PowerShell 5.1 syntax, enforced
+  in CI by PSScriptAnalyzer's `PSUseCompatibleSyntax`; the file documents how to fork it if
+  that ever stops being possible.
 - `config.psd1` configuration format for the PowerShell client — a PowerShell data file, read
   with `Import-PowerShellDataFile` so it cannot execute code. Single-quoted strings mean
   Windows paths need no backslash escaping.

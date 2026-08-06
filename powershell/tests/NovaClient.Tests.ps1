@@ -175,7 +175,8 @@ AfterAll {
 
 Describe 'Static analysis' {
     It 'both scripts parse without syntax errors' {
-        foreach ($name in @('NovaClient-WinPS5.ps1', 'NovaClient-PS7.ps1', 'Install-NovaClientTask.ps1')) {
+        foreach ($name in @('NovaClient-WinPS5.ps1', 'NovaClient-PS7.ps1',
+                            'NovaClient.Common.ps1', 'Install-NovaClientTask.ps1')) {
             $path = Join-Path $Script:PsDir $name
             $errors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$errors)
@@ -183,20 +184,50 @@ Describe 'Static analysis' {
         }
     }
 
-    It 'the two clients are identical below the transport boundary' {
-        $marker = 'END HTTP TRANSPORT'
-        $tail = {
-            param($p)
-            $lines = Get-Content -LiteralPath $p
-            $idx = ($lines | Select-String -SimpleMatch $marker | Select-Object -First 1).LineNumber
-            $lines[($idx)..($lines.Count - 1)]
-        }
-        $a = & $tail (Join-Path $Script:PsDir 'NovaClient-WinPS5.ps1')
-        $b = & $tail (Join-Path $Script:PsDir 'NovaClient-PS7.ps1')
+    It 'both launchers dot-source the shared implementation' {
+        # The shared code used to be duplicated in both files and kept in sync
+        # by a diff test. Now there is one copy; this asserts it stays wired up,
+        # and that neither launcher has quietly grown its own logic again.
+        foreach ($name in @('NovaClient-WinPS5.ps1', 'NovaClient-PS7.ps1')) {
+            $path = Join-Path $Script:PsDir $name
+            $text = Get-Content -LiteralPath $path -Raw
+            $text | Should -Match '\.\s+\$commonPath' -Because "$name should dot-source the common file"
 
-        # One intentional difference: the version banner names the host.
-        $diff = Compare-Object $a $b
-        @($diff).Count | Should -BeLessOrEqual 2 -Because 'only the version banner line should differ'
+            # A launcher is a transport plus a few lines of wiring. If one grows
+            # past this, shared logic has probably leaked back into it.
+            (Get-Content -LiteralPath $path).Count |
+                Should -BeLessThan 300 -Because "$name should hold transport only"
+        }
+    }
+
+    It 'the shared implementation stays compatible with Windows PowerShell 5.1' {
+        # NovaClient.Common.ps1 runs under both hosts, and CI runs on Linux
+        # where only pwsh exists - so a 7-only construct would sail through
+        # every other test here and fail on the Windows BBS box instead.
+        # PSUseCompatibleSyntax parses against the 5.1 grammar to catch it.
+        if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Set-ItResult -Skipped -Because 'PSScriptAnalyzer is not installed'
+            return
+        }
+
+        $settings = @{
+            IncludeRules = @('PSUseCompatibleSyntax')
+            Rules        = @{
+                PSUseCompatibleSyntax = @{
+                    Enable         = $true
+                    TargetVersions = @('5.1', '7.0')
+                }
+            }
+        }
+        $found = Invoke-ScriptAnalyzer `
+            -Path (Join-Path $Script:PsDir 'NovaClient.Common.ps1') -Settings $settings
+
+        # Read the rule text if this fails: it names the construct and the line.
+        # Either rewrite it in 5.1-compatible form, or fork the file - see the
+        # rule documented at the top of NovaClient.Common.ps1.
+        $found | Should -BeNullOrEmpty -Because (
+            'shared code must run on 5.1: ' + (($found | ForEach-Object {
+                "line $($_.Line): $($_.Message)" }) -join '; '))
     }
 
     It 'the config example is valid PowerShell data' {

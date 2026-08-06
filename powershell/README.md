@@ -10,10 +10,20 @@ no build step: copy the folder onto the BBS machine and run it.
 | `NovaClient-WinPS5.ps1` | Windows PowerShell 5.1 | **Default.** 5.1 ships with every Windows since 7, so this needs nothing installed. |
 | `NovaClient-PS7.ps1` | PowerShell 7.0+ | You already have PowerShell 7 and prefer it. |
 
-They are the same client. Below the `HTTP TRANSPORT` block near the top of each file the two
-are byte-identical — only the HTTP layer differs, because 5.1 turns every non-2xx response
-into a terminating exception whose body has to be dug out of a response stream, while 7 can
-just hand you the status code. A test asserts that the rest stays in step.
+They are the same client. Each of those two files is a launcher holding nothing but its own
+HTTP layer — that is the only part that genuinely differs, because 5.1 turns every non-2xx
+response into a terminating exception whose body has to be dug out of a response stream,
+while 7 can just hand you the status code. Everything else — sync, daemon, game maintenance,
+validation — lives once in **`NovaClient.Common.ps1`**, which both dot-source.
+
+So: **copy the whole `powershell/` folder, not one script.** A launcher on its own exits 2
+and tells you what is missing.
+
+`NovaClient.Common.ps1` must stay runnable on Windows PowerShell 5.1, the lowest version any
+launcher supports. CI enforces that with PSScriptAnalyzer's `PSUseCompatibleSyntax` rule, so
+a `??` or a ternary that slips in fails the build rather than the BBS. If the shared code ever
+genuinely needs something 5.1 cannot do, fork it rather than adding version probes — the
+procedure is written at the top of the file.
 
 ## Setup
 

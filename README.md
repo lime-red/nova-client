@@ -86,7 +86,8 @@ ever download them.
 
 ```
 python/       Python client — client.py (one-shot), daemon.py (continuous)
-powershell/   PowerShell client — Windows only, two variants for 5.1 and 7+
+powershell/   PowerShell client — Windows only. Two launchers (5.1 and 7+) over
+              one shared NovaClient.Common.ps1; deploy the folder, not a file.
 linux/        systemd unit and shell helpers
 VERSION       current release
 CHANGELOG.md  what changed and when
