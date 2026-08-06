@@ -120,7 +120,8 @@ function Invoke-NovaRequest {
         [string] $ContentType,
         [string] $InFile,
         [string] $OutFile,
-        [int] $TimeoutSec = 120
+        [int] $TimeoutSec = 120,
+        [switch] $Raw
     )
 
     $requestHeaders = @{ 'User-Agent' = $Script:UserAgent }
@@ -152,11 +153,18 @@ function Invoke-NovaRequest {
             }
         }
 
+        $bytes = $null
+        if ($Raw -and $null -ne $response -and $null -ne $response.RawContentStream) {
+            $bytes = $response.RawContentStream.ToArray()
+        }
+
         if ($status -ge 200 -and $status -lt 300) {
             return [pscustomobject]@{
                 Ok         = $true
                 StatusCode = $status
                 Content    = $content
+                Bytes      = $bytes
+                Headers    = ConvertTo-NovaHeaderTable $response.Headers
                 Detail     = ''
                 Transport  = $false
             }
@@ -172,6 +180,8 @@ function Invoke-NovaRequest {
             Ok         = $false
             StatusCode = $status
             Content    = $content
+            Bytes      = $null
+            Headers    = ConvertTo-NovaHeaderTable $response.Headers
             Detail     = ConvertFrom-NovaErrorBody $content "HTTP $status"
             Transport  = $false
         }
@@ -183,6 +193,8 @@ function Invoke-NovaRequest {
             Ok         = $false
             StatusCode = 0
             Content    = ''
+            Bytes      = $null
+            Headers    = @{}
             Detail     = $_.Exception.Message
             Transport  = $true
         }

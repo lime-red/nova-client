@@ -20,6 +20,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "python" / "tests"))
 
+from fastapi import Request  # noqa: E402
+
 from mock_server import app, storage  # noqa: E402
 
 # A packet from BBS 01 addressed to us (02), waiting to be collected.
@@ -68,6 +70,15 @@ async def reset_for_test() -> dict:
     """Test-only. Exists on this wrapper, never on the real hub."""
     seed()
     return {"status": "reset"}
+
+
+@app.post("/__test__/nodelist/{league_id}")
+async def replace_nodelist_for_test(league_id: str, request: Request) -> dict:
+    """Test-only. Clients may not upload nodelists, so tests cannot change one
+    through the API - but they need to, to prove the client notices a real
+    change rather than merely caching forever."""
+    storage.add_nodelist(league_id.upper(), await request.body())
+    return {"status": "replaced"}
 
 
 seed()

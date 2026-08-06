@@ -22,9 +22,13 @@
     Name of the scheduled task. Defaults to 'NovaClient'.
 
 .PARAMETER User
-    Account to run as. Defaults to SYSTEM, which survives logoff. Give a real
-    account if your game directories are on a mapped drive - SYSTEM cannot see
-    per-user drive mappings, only UNC paths and local drives.
+    Account to run as. Defaults to SYSTEM, which survives logoff.
+
+    Use a real account if your game lives on a network share. SYSTEM cannot see
+    per-user drive mappings, and switching those paths to UNC is NOT a fix: BRE
+    and FE are DOS programs and DOS has no concept of UNC, so the game cannot
+    run from \\server\share however happily PowerShell reads it. Either run as
+    an account that has the drive mapped, or keep the game on a local drive.
 
 .EXAMPLE
     .\Install-NovaClientTask.ps1 -WhatIf

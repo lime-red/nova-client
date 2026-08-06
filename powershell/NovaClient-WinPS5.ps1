@@ -118,7 +118,8 @@ function Invoke-NovaRequest {
         [string] $ContentType,
         [string] $InFile,
         [string] $OutFile,
-        [int] $TimeoutSec = 120
+        [int] $TimeoutSec = 120,
+        [switch] $Raw
     )
 
     $requestHeaders = @{ 'User-Agent' = $Script:UserAgent }
@@ -141,13 +142,20 @@ function Invoke-NovaRequest {
         $response = Invoke-WebRequest @splat
 
         # 5.1 has no -PassThru, so -OutFile returns nothing at all. Reaching
-        # here at all means no exception was thrown, and on 5.1 any non-2xx
+        # here at all means no exception was thrown, and on 5.1 any 4xx or 5xx
         # throws - so a null response is a success that went to the file.
         if ($null -eq $response) {
             return [pscustomobject]@{
-                Ok = $true; StatusCode = 200; Content = ''; Detail = ''; Transport = $false
+                Ok = $true; StatusCode = 200; Content = ''; Bytes = $null
+                Headers = @{}; Detail = ''; Transport = $false
             }
         }
+
+        # Not every non-throwing status is a success: .NET only raises for 4xx
+        # and 5xx, so a 304 arrives here looking fine. Range-check it, or a
+        # conditional request would be read as a body that is not there.
+        $status = [int]$response.StatusCode
+        $ok = ($status -ge 200 -and $status -lt 300)
 
         $content = ''
         if (-not $OutFile -and $null -ne $response.Content) {
@@ -157,11 +165,19 @@ function Invoke-NovaRequest {
                 [string]$response.Content
             }
         }
+
+        $bytes = $null
+        if ($Raw -and $ok -and $null -ne $response.RawContentStream) {
+            $bytes = $response.RawContentStream.ToArray()
+        }
+
         return [pscustomobject]@{
-            Ok         = $true
-            StatusCode = [int]$response.StatusCode
+            Ok         = $ok
+            StatusCode = $status
             Content    = $content
-            Detail     = ''
+            Bytes      = $bytes
+            Headers    = ConvertTo-NovaHeaderTable $response.Headers
+            Detail     = $(if ($ok) { '' } else { ConvertFrom-NovaErrorBody $content "HTTP $status" })
             Transport  = $false
         }
     }
@@ -175,6 +191,8 @@ function Invoke-NovaRequest {
                 Ok         = $false
                 StatusCode = 0
                 Content    = ''
+                Bytes      = $null
+                Headers    = @{}
                 Detail     = $_.Exception.Message
                 Transport  = $true
             }
@@ -193,6 +211,8 @@ function Invoke-NovaRequest {
             Ok         = $false
             StatusCode = $status
             Content    = $bodyText
+            Bytes      = $null
+            Headers    = ConvertTo-NovaHeaderTable $webResponse.Headers
             Detail     = ConvertFrom-NovaErrorBody $bodyText $_.Exception.Message
             Transport  = $false
         }
@@ -202,6 +222,8 @@ function Invoke-NovaRequest {
             Ok         = $false
             StatusCode = 0
             Content    = ''
+            Bytes      = $null
+            Headers    = @{}
             Detail     = $_.Exception.Message
             Transport  = $true
         }

@@ -41,9 +41,18 @@
 
       function Invoke-NovaRequest   -Method -Uri [-Headers] [-Body]
                                     [-ContentType] [-InFile] [-OutFile]
-                                    [-TimeoutSec]
-            Never throws for an HTTP-level failure. Returns an object with
-            .Ok .StatusCode .Content .Detail .Transport
+                                    [-TimeoutSec] [-Raw]
+            Never throws for an HTTP-level failure. Returns an object carrying
+            ALL of these properties on every path, including failures -
+            Set-StrictMode 2.0 turns a missing one into a crash:
+
+              .Ok         [bool]     2xx only. A 304 is NOT Ok.
+              .StatusCode [int]      0 means the request never reached the hub
+              .Content    [string]   body as text ('' when -OutFile)
+              .Bytes      [byte[]]   body as bytes, only when -Raw was passed
+              .Headers    [hashtable] response headers, keys lowercased
+              .Detail     [string]   hub error message, unwrapped from {"detail"}
+              .Transport  [bool]     connection-level failure, so worth retrying
 
       function ConvertFrom-NovaJson -Text  ->  PSCustomObject or $null
 
@@ -109,6 +118,40 @@ function ConvertFrom-NovaErrorBody {
         }
     }
     return ($parts -join '; ')
+}
+
+function ConvertTo-NovaHeaderTable {
+    <#
+        Flatten response headers into a plain hashtable keyed by lowercase name,
+        so callers can index them the same way on both hosts.
+
+        The two runtimes disagree on the shape: 5.1 gives
+        Dictionary[string,string] (and WebHeaderCollection on the exception
+        path), 7 gives Dictionary[string,string[]]. Header names are
+        case-insensitive per RFC 9110, and the casing the hub sends is not
+        guaranteed, so normalise rather than trusting 'ETag' to come back
+        spelled that way.
+    #>
+    param($Headers)
+
+    $table = @{}
+    if ($null -eq $Headers) { return $table }
+
+    if ($Headers -is [Net.WebHeaderCollection]) {
+        foreach ($name in $Headers.AllKeys) {
+            $table[$name.ToLowerInvariant()] = $Headers[$name]
+        }
+        return $table
+    }
+
+    foreach ($entry in $Headers.GetEnumerator()) {
+        $value = $entry.Value
+        # An array-valued header (7.x) collapses to the comma-separated form
+        # the wire uses anyway.
+        if ($value -is [array]) { $value = $value -join ', ' }
+        $table[$entry.Key.ToLowerInvariant()] = [string]$value
+    }
+    return $table
 }
 
 # ============================================================================
@@ -431,7 +474,9 @@ function Invoke-NovaApi {
         [string] $Uri,
         [string] $InFile,
         [string] $OutFile,
-        [string] $ContentType
+        [string] $ContentType,
+        [hashtable] $ExtraHeaders,
+        [switch] $Raw
     )
 
     $maxRetries = [int](Get-NovaSetting $Cfg 'Sync.MaxRetries' 3)
@@ -442,13 +487,20 @@ function Invoke-NovaApi {
     for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
         $headers = Get-NovaAuthHeader -Cfg $Cfg
         if ($null -eq $headers) {
-            return [pscustomobject]@{ Ok = $false; StatusCode = 0; Content = ''; Detail = 'No auth token'; Transport = $true }
+            return [pscustomobject]@{
+                Ok = $false; StatusCode = 0; Content = ''; Bytes = $null
+                Headers = @{}; Detail = 'No auth token'; Transport = $true
+            }
+        }
+        if ($ExtraHeaders) {
+            foreach ($key in $ExtraHeaders.Keys) { $headers[$key] = $ExtraHeaders[$key] }
         }
 
         $splat = @{ Method = $Method; Uri = $Uri; Headers = $headers; TimeoutSec = $timeout }
         if ($InFile)      { $splat.InFile      = $InFile }
         if ($OutFile)     { $splat.OutFile     = $OutFile }
         if ($ContentType) { $splat.ContentType = $ContentType }
+        if ($Raw)         { $splat.Raw         = $true }
 
         $result = Invoke-NovaRequest @splat
         if ($result.Ok) { return $result }
@@ -597,11 +649,104 @@ function Receive-NovaPacket {
     return $true
 }
 
+$Script:NodelistEtags = $null
+
+function Get-NovaNodelistStatePath {
+    <#
+        Sits next to metrics.json, which is already the client's writable state
+        location, so no new config key is needed. Deliberately NOT in the game
+        folder: BRE scans that directory, and it has no business seeing our
+        bookkeeping.
+    #>
+    param([hashtable] $Cfg)
+
+    $metricsFile = Get-NovaSetting $Cfg 'Sync.MetricsFile' 'metrics.json'
+    $dir = Split-Path -Parent $metricsFile
+    if (-not $dir) { $dir = '.' }
+    return (Join-Path $dir 'nodelist-etags.json')
+}
+
+function Get-NovaNodelistEtags {
+    <#
+        Lazily loaded, and a hashtable rather than the PSCustomObject
+        ConvertFrom-Json hands back, because 5.1 has no -AsHashtable.
+        Any problem reading it just means we re-download once - never fatal.
+    #>
+    param([hashtable] $Cfg)
+
+    if ($null -ne $Script:NodelistEtags) { return $Script:NodelistEtags }
+
+    $Script:NodelistEtags = @{}
+    $path = Get-NovaNodelistStatePath -Cfg $Cfg
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $parsed = ConvertFrom-NovaJson (Get-Content -LiteralPath $path -Raw)
+            if ($null -ne $parsed) {
+                foreach ($prop in $parsed.PSObject.Properties) {
+                    $Script:NodelistEtags[$prop.Name] = [string]$prop.Value
+                }
+            }
+        }
+        catch {
+            Write-NovaLog DEBUG "Ignoring unreadable nodelist state $path : $($_.Exception.Message)"
+        }
+    }
+    return $Script:NodelistEtags
+}
+
+function Save-NovaNodelistEtag {
+    param([hashtable] $Cfg, [string] $Key, [string] $Etag)
+
+    $state = Get-NovaNodelistEtags -Cfg $Cfg
+    if ($state[$Key] -eq $Etag) { return }
+    $state[$Key] = $Etag
+
+    # Written on every change rather than at exit, so a daemon killed mid-cycle
+    # does not lose the tag and re-download on every restart.
+    $path = Get-NovaNodelistStatePath -Cfg $Cfg
+    try {
+        $state | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $path -Encoding UTF8
+    }
+    catch {
+        Write-NovaLog DEBUG "Could not write nodelist state $path : $($_.Exception.Message)"
+    }
+}
+
+function Test-NovaBytesEqual {
+    param([byte[]] $A, [byte[]] $B)
+
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    if ($A.Length -ne $B.Length) { return $false }
+    for ($i = 0; $i -lt $A.Length; $i++) {
+        if ($A[$i] -ne $B[$i]) { return $false }
+    }
+    return $true
+}
+
 function Receive-NovaNodelist {
     <#
         The hub derives the nodelist filename itself from the league, so we ask
         for it by league and write whatever it gives us into the game folder.
         Treat the body as an opaque blob - parsing it is the door game's job.
+
+        Nodelists change rarely but a daemon asks every couple of minutes, so
+        this is a conditional request: we send back the ETag the hub gave us
+        last time and expect a 304. Two things still guard against a needless
+        write if that does not happen - a hub too old to answer 304, a lost
+        state file, a hub that stops sending ETags:
+
+          1. the bytes are compared with what is already on disk, and
+          2. the file is only replaced, and only logged at INFO, on a real
+             change.
+
+        That matters more than the 215 bytes saved. Rewriting the file every
+        cycle churns a file the door game may have open, and an INFO line every
+        cycle saying "Updated nodelist" is exactly the noise that hides the one
+        time it genuinely did update.
+
+        Fetched into memory rather than with -OutFile because 5.1 returns no
+        response object at all for -OutFile, and the ETag lives in the headers.
+        Nodelists are a few KB, so there is nothing to stream.
     #>
     param([hashtable] $Cfg, $League)
 
@@ -624,10 +769,21 @@ function Receive-NovaNodelist {
     $partPath = "$finalPath.part"
     if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force }
 
-    $result = Invoke-NovaApi -Cfg $Cfg -Method 'GET' -Uri $url -OutFile $partPath
+    # Only claim to hold a cached copy if we actually still have the file that
+    # tag describes. Otherwise a deleted nodelist would never come back.
+    $extraHeaders = @{}
+    $haveFile = Test-Path -LiteralPath $finalPath
+    $knownEtag = (Get-NovaNodelistEtags -Cfg $Cfg)[$League.LeagueId]
+    if ($knownEtag -and $haveFile) { $extraHeaders['If-None-Match'] = $knownEtag }
+
+    $result = Invoke-NovaApi -Cfg $Cfg -Method 'GET' -Uri $url -Raw -ExtraHeaders $extraHeaders
+
+    if ($result.StatusCode -eq 304) {
+        Write-NovaLog DEBUG "Nodelist $safeName unchanged (304)" $League.Key
+        return $false
+    }
 
     if (-not $result.Ok) {
-        if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force }
         # 404 just means the hub has not generated one yet - not an error.
         if ($result.StatusCode -eq 404) {
             Write-NovaLog DEBUG "No nodelist available yet for $($League.LeagueId)"
@@ -638,8 +794,28 @@ function Receive-NovaNodelist {
         return $false
     }
 
+    $bytes = $result.Bytes
+    if ($null -eq $bytes -or $bytes.Length -eq 0) {
+        Write-NovaLog WARN "Hub returned an empty nodelist for $($League.LeagueId); keeping the existing one"
+        return $false
+    }
+
+    $newEtag = $result.Headers['etag']
+
+    if ($haveFile -and (Test-NovaBytesEqual $bytes ([IO.File]::ReadAllBytes($finalPath)))) {
+        Write-NovaLog DEBUG "Nodelist $safeName unchanged" $League.Key
+        if ($newEtag) { Save-NovaNodelistEtag -Cfg $Cfg -Key $League.LeagueId -Etag $newEtag }
+        return $false
+    }
+
+    [IO.File]::WriteAllBytes($partPath, $bytes)
     Move-Item -LiteralPath $partPath -Destination $finalPath -Force
-    Write-NovaLog INFO "Updated nodelist $safeName" $League.Key
+
+    # Saved only after the file is in place, so an interrupted write cannot
+    # leave us remembering a tag for content we never stored.
+    if ($newEtag) { Save-NovaNodelistEtag -Cfg $Cfg -Key $League.LeagueId -Etag $newEtag }
+
+    Write-NovaLog INFO "Updated nodelist $safeName ($($bytes.Length) bytes)" $League.Key
     return $true
 }
 
@@ -920,6 +1096,25 @@ function Test-NovaConfig {
                 if ($pair.Required) { $null = $problems.Add("${label}: $($pair.Name) is required") }
                 continue
             }
+            # Checked before existence, deliberately: a UNC GameFolder is wrong
+            # whether or not the share happens to be reachable right now, and
+            # "does not exist" would send you off diagnosing the wrong thing.
+            #
+            # BRE and FE are DOS programs, and DOS has no concept of UNC, so a
+            # \\server\share path cannot be their working directory. PowerShell
+            # handles it happily and then the game fails on its own file opens,
+            # which is a miserable failure to chase. Map a drive letter, or keep
+            # the game local.
+            if ($pair.Value -match '^\\\\') {
+                if ($pair.Name -eq 'GameFolder') {
+                    $null = $problems.Add("${label}: GameFolder must not be a UNC path - the DOS game cannot use one. Map a drive letter instead: $($pair.Value)")
+                }
+                else {
+                    $null = $warnings.Add("${label}: $($pair.Name) is a UNC path. The client can read it, but the game cannot, so make sure nothing hands this path to BRE/FE: $($pair.Value)")
+                }
+                continue
+            }
+
             if (-not (Test-Path -LiteralPath $pair.Value -PathType Container)) {
                 $null = $problems.Add("${label}: $($pair.Name) does not exist: $($pair.Value)")
                 continue

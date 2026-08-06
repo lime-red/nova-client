@@ -300,6 +300,18 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             $r.ExitCode | Should -Be 2
             $r.Output | Should -Match 'more than one league'
         }
+
+        It 'rejects a UNC GameFolder, which the DOS game cannot use' {
+            (Get-Content $Script:Ws.Config -Raw) -replace
+                "GameFolder  = '[^']*'", "GameFolder  = '\\\\fileserver\\bbs\\BRE_555'" |
+                Set-Content $Script:Ws.Config
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 2
+            $r.Output | Should -Match 'must not be a UNC path'
+            # Not "does not exist" - the point is that the path is wrong in kind,
+            # which holds whether or not the share is reachable from here.
+            $r.Output | Should -Not -Match 'GameFolder does not exist'
+        }
     }
 
     Context 'sync' {
@@ -373,6 +385,67 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
         It 'writes the nodelist into the game folder' {
             $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
             Test-Path (Join-Path $Script:Ws.Game 'BRNODES.555') | Should -BeTrue
+        }
+
+        It 'does not re-download an unchanged nodelist' {
+            $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
+
+            $first = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $first.Output | Should -Match 'Updated nodelist BRNODES\.555'
+            $stamp = (Get-Item -LiteralPath $nodelist).LastWriteTimeUtc
+
+            # The ETag is remembered next to metrics.json, not in the game
+            # folder - the door game scans that directory.
+            $state = Join-Path $Script:Ws.Root 'nodelist-etags.json'
+            Test-Path -LiteralPath $state | Should -BeTrue
+
+            Start-Sleep -Milliseconds 1100   # so a rewrite would move the mtime
+
+            $second = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config `
+                -ClientArgs @('-Once', '-Verbose')
+            $second.ExitCode | Should -Be 0
+            $second.Output | Should -Not -Match 'Updated nodelist'
+            # Specifically the 304, not the byte-compare fallback - otherwise
+            # this test would still pass with conditional requests broken.
+            $second.Output | Should -Match 'unchanged \(304\)'
+
+            # The file must be left completely alone, not rewritten identically.
+            (Get-Item -LiteralPath $nodelist).LastWriteTimeUtc | Should -Be $stamp
+        }
+
+        It 'picks up a nodelist that has actually changed' {
+            $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
+            $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+
+            $token = (Invoke-RestMethod -Method Post -Uri "$Script:HubUrl/service/api/v1/auth/token" `
+                -Body @{ grant_type = 'client_credentials'
+                         client_id = 'test_client'; client_secret = 'test_secret' }).access_token
+            $null = Invoke-RestMethod -Method Post -Uri "$Script:HubUrl/__test__/nodelist/555B" `
+                -Headers @{ Authorization = "Bearer $token" } `
+                -ContentType 'application/octet-stream' `
+                -Body ([Text.Encoding]::ASCII.GetBytes("2`nTest BBS`n1:2/3`n`n`n`n`n9`nNew Node`n"))
+
+            $second = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $second.Output | Should -Match 'Updated nodelist BRNODES\.555'
+            (Get-Content -LiteralPath $nodelist -Raw) | Should -Match 'New Node'
+        }
+
+        It 'still avoids a needless write if the hub sends no ETag' {
+            # Belt and braces for an older hub, or a lost state file: identical
+            # bytes must not churn a file the door game may have open.
+            $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
+            $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            Remove-Item -LiteralPath (Join-Path $Script:Ws.Root 'nodelist-etags.json') -Force
+            $stamp = (Get-Item -LiteralPath $nodelist).LastWriteTimeUtc
+
+            Start-Sleep -Milliseconds 1100
+            $second = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config `
+                -ClientArgs @('-Once', '-Verbose')
+            $second.Output | Should -Not -Match 'Updated nodelist'
+            # With no stored ETag there is nothing to send, so the hub returns
+            # 200 and the byte-compare is what saves the write.
+            $second.Output | Should -Not -Match '\(304\)'
+            (Get-Item -LiteralPath $nodelist).LastWriteTimeUtc | Should -Be $stamp
         }
 
         It 'stops seeing a packet as unread once downloaded' {

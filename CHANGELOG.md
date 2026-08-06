@@ -25,6 +25,21 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   an explanation. `NovaClient.Common.ps1` is held to Windows PowerShell 5.1 syntax, enforced
   in CI by PSScriptAnalyzer's `PSUseCompatibleSyntax`; the file documents how to fork it if
   that ever stops being possible.
+- **Nodelist caching (PowerShell).** The client stores the hub's `ETag` and sends it back as
+  `If-None-Match`, so an unchanged nodelist costs a `304` instead of a download every cycle.
+  Two independent guards cover a hub too old to answer 304, a lost state file, or a hub that
+  stops sending ETags: the bytes are compared with what is on disk, and the file is replaced
+  — and logged at INFO — only on a real change. That matters more than the bytes saved:
+  rewriting the file every cycle churns a file the door game may have open, and an "Updated
+  nodelist" line every cycle hides the one time it genuinely updated. The ETag lives in
+  `nodelist-etags.json` beside `metrics.json`, deliberately not in the game folder.
+  Needs hub ≥ the 304 change; older hubs fall back to the byte comparison.
+- **UNC path rejection (PowerShell).** `-Validate` now fails a `GameFolder` under `\\server\share`
+  and warns for inbound/outbound directories. BRE and FE are DOS programs and DOS has no
+  concept of UNC, so the game cannot run from one however happily PowerShell reads it. This
+  also corrects the Scheduled Task guidance, which previously suggested UNC as the workaround
+  for SYSTEM not seeing mapped drives — the fix is to run the task as an account that has the
+  drive mapped, or to keep the game local.
 - `config.psd1` configuration format for the PowerShell client — a PowerShell data file, read
   with `Import-PowerShellDataFile` so it cannot execute code. Single-quoted strings mean
   Windows paths need no backslash escaping.

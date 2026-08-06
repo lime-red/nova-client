@@ -101,12 +101,17 @@ This registers a Scheduled Task that starts at boot, restarts on failure, and ha
 execution time limit (without that last part Windows silently kills it after three days).
 
 It runs as `SYSTEM` by default. **If your game directories are on a mapped drive, that will
-not work** — SYSTEM cannot see per-user drive mappings. Either use a UNC path in the config,
-or install the task under your own account:
+not work** — SYSTEM cannot see per-user drive mappings. Install the task under an account
+that does have the drive mapped:
 
 ```powershell
 .\Install-NovaClientTask.ps1 -User 'MYBBS\sysop'
 ```
+
+**Do not reach for a UNC path to work around this.** BRE and FE are DOS programs, and DOS has
+no concept of UNC — `\\server\share` cannot be the game's working directory, no matter how
+happily PowerShell reads it. `-Validate` rejects a UNC `GameFolder` outright for that reason,
+and warns about a UNC inbound/outbound directory. Map a drive letter, or keep the game local.
 
 To remove it: `Unregister-ScheduledTask -TaskName NovaClient -Confirm:$false`
 
