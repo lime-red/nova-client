@@ -48,6 +48,21 @@
 
         # Written after every sync; handy for monitoring.
         MetricsFile = '.\metrics.json'
+
+        # When to ask the hub directly for a nodelist.
+        #
+        # You normally want 'bootstrap' (the default). The hub queues a changed
+        # nodelist as an ordinary packet, so it arrives with everything else -
+        # nodelists change once or twice a year, and polling for that is waste.
+        # 'bootstrap' only fetches when this node has no nodelist at all, which
+        # is what a brand new node needs so it does not sit blind until the next
+        # hub-side regeneration.
+        #
+        #   'bootstrap'  fetch only when the local nodelist is missing (default)
+        #   'always'     poll every sync (conditional request; needs a hub that
+        #                answers 304, or it re-downloads each time)
+        #   'never'      never fetch directly; rely purely on the packet queue
+        NodelistCheck = 'bootstrap'
     }
 
     Daemon = @{

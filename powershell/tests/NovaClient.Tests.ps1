@@ -153,6 +153,21 @@ BeforeAll {
         }
     }
 
+    function Set-NodelistCheck {
+        <#
+            The default is 'bootstrap', which fetches a nodelist only when there
+            is none locally - so the caching tests have to opt into 'always' to
+            have anything to cache.
+        #>
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+        [CmdletBinding()]
+        param([string] $ConfigPath, [string] $Mode)
+
+        (Get-Content -LiteralPath $ConfigPath -Raw).Replace(
+            'MetricsFile       =', "NodelistCheck     = '$Mode'`n        MetricsFile       =") |
+            Set-Content -LiteralPath $ConfigPath
+    }
+
     function Invoke-Client {
         param($Target, [string] $ConfigPath, [string[]] $ClientArgs)
         $all = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Target.Script,
@@ -387,7 +402,26 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             Test-Path (Join-Path $Script:Ws.Game 'BRNODES.555') | Should -BeTrue
         }
 
+        It 'stops asking for the nodelist once it has one' {
+            # The default. The hub queues a changed nodelist as an ordinary
+            # packet, so polling for it every sync is waste - a nodelist changes
+            # once or twice a year. The first run has nothing locally and must
+            # bootstrap; the second must not ask at all.
+            $first = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config `
+                -ClientArgs @('-Once', '-Verbose')
+            $first.Output | Should -Match 'No local BRNODES\.555 yet'
+            Test-Path (Join-Path $Script:Ws.Game 'BRNODES.555') | Should -BeTrue
+
+            $second = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config `
+                -ClientArgs @('-Once', '-Verbose')
+            $second.Output | Should -Match 'Have BRNODES\.555 already'
+            # -Verbose echoes every request, so this proves no call was made
+            # rather than merely that no file was written.
+            $second.Output | Should -Not -Match 'leagues/555B/nodelist'
+        }
+
         It 'does not re-download an unchanged nodelist' {
+            Set-NodelistCheck -ConfigPath $Script:Ws.Config -Mode 'always'
             $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
 
             $first = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
@@ -414,6 +448,7 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
         }
 
         It 'picks up a nodelist that has actually changed' {
+            Set-NodelistCheck -ConfigPath $Script:Ws.Config -Mode 'always'
             $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
             $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
 
@@ -433,6 +468,7 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
         It 'still avoids a needless write if the hub sends no ETag' {
             # Belt and braces for an older hub, or a lost state file: identical
             # bytes must not churn a file the door game may have open.
+            Set-NodelistCheck -ConfigPath $Script:Ws.Config -Mode 'always'
             $nodelist = Join-Path $Script:Ws.Game 'BRNODES.555'
             $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
             Remove-Item -LiteralPath (Join-Path $Script:Ws.Root 'nodelist-etags.json') -Force

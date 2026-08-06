@@ -25,15 +25,18 @@ moved; a PowerShell client is added for Windows nodes that would rather not inst
   an explanation. `NovaClient.Common.ps1` is held to Windows PowerShell 5.1 syntax, enforced
   in CI by PSScriptAnalyzer's `PSUseCompatibleSyntax`; the file documents how to fork it if
   that ever stops being possible.
-- **Nodelist caching (PowerShell).** The client stores the hub's `ETag` and sends it back as
-  `If-None-Match`, so an unchanged nodelist costs a `304` instead of a download every cycle.
-  Two independent guards cover a hub too old to answer 304, a lost state file, or a hub that
-  stops sending ETags: the bytes are compared with what is on disk, and the file is replaced
-  — and logged at INFO — only on a real change. That matters more than the bytes saved:
-  rewriting the file every cycle churns a file the door game may have open, and an "Updated
-  nodelist" line every cycle hides the one time it genuinely updated. The ETag lives in
-  `nodelist-etags.json` beside `metrics.json`, deliberately not in the game folder.
-  Needs hub ≥ the 304 change; older hubs fall back to the byte comparison.
+- **Nodelist handling (PowerShell).** The client no longer polls `GET .../nodelist` on every
+  sync. The hub queues a regenerated nodelist as an ordinary packet addressed to each member
+  BBS, so it already arrives through the normal unread-packet flow — which is the point of
+  that design, since a nodelist changes once or twice a year. New `Sync.NodelistCheck`:
+
+  - `'bootstrap'` (default) — fetch directly only when this node has no nodelist at all, so
+    a newly registered node is not blind until the next hub-side regeneration.
+  - `'always'` — poll every sync. Sends `If-None-Match` and expects a `304`; against a hub
+    without conditional support it falls back to comparing bytes, so an unchanged nodelist is
+    still never rewritten and never logged at INFO. The ETag lives in `nodelist-etags.json`
+    beside `metrics.json`, deliberately not in the game folder.
+  - `'never'` — rely purely on the packet queue.
 - **Fixed: `-Daemon` threw on every cycle before maintenance had run once (PowerShell).** The
   sleep calculation used `[Math]::Max(1, $wait)`, and until `$lastMaintenance` was set it was
   about -6.4e10 — correct, meaning "long overdue", but the literal `1` selected the `Int32`

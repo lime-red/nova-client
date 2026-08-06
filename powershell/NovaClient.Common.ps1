@@ -729,11 +729,22 @@ function Receive-NovaNodelist {
         for it by league and write whatever it gives us into the game folder.
         Treat the body as an opaque blob - parsing it is the door game's job.
 
-        Nodelists change rarely but a daemon asks every couple of minutes, so
-        this is a conditional request: we send back the ETag the hub gave us
-        last time and expect a 304. Two things still guard against a needless
-        write if that does not happen - a hub too old to answer 304, a lost
-        state file, a hub that stops sending ETags:
+        THIS IS NOT THE NORMAL WAY A NODELIST ARRIVES. The hub stores a changed
+        nodelist as an ordinary Packet addressed to each member BBS, so it comes
+        down through the same unread-packet flow as everything else - already
+        handled by Invoke-NovaLeagueDownload. That is deliberate hub design: a
+        nodelist changes once or twice a year, and having every client poll for
+        it every couple of minutes to find that out is the wrong shape.
+
+        So by default this only fires when we have no local nodelist at all -
+        a brand new node, or one whose game folder was rebuilt, either of which
+        would otherwise wait for the next hub-side regeneration. Set
+        Sync.NodelistCheck = 'always' to poll anyway, or 'never' to disable it.
+
+        In 'always' mode it is a conditional request: we send back the ETag the
+        hub gave us last time and expect a 304. Two things still guard against a
+        needless write if that does not happen - a hub too old to answer 304, a
+        lost state file, a hub that stops sending ETags:
 
           1. the bytes are compared with what is already on disk, and
           2. the file is only replaced, and only logged at INFO, on a real
@@ -767,12 +778,33 @@ function Receive-NovaNodelist {
 
     $finalPath = Join-Path $League.GameFolder $safeName
     $partPath = "$finalPath.part"
+    $haveFile = Test-Path -LiteralPath $finalPath
+
+    $mode = Get-NovaSetting $Cfg 'Sync.NodelistCheck' 'bootstrap'
+    switch ($mode) {
+        'never' {
+            Write-NovaLog DEBUG "Sync.NodelistCheck is 'never'; not fetching $safeName"
+            return $false
+        }
+        'bootstrap' {
+            if ($haveFile) {
+                Write-NovaLog DEBUG "Have $safeName already; the hub sends changes as packets"
+                return $false
+            }
+            Write-NovaLog INFO "No local $safeName yet; fetching one to start from" $League.Key
+        }
+        'always' { }
+        default {
+            Write-NovaLog WARN "Unknown Sync.NodelistCheck '$mode'; treating it as 'bootstrap'"
+            if ($haveFile) { return $false }
+        }
+    }
+
     if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force }
 
     # Only claim to hold a cached copy if we actually still have the file that
     # tag describes. Otherwise a deleted nodelist would never come back.
     $extraHeaders = @{}
-    $haveFile = Test-Path -LiteralPath $finalPath
     $knownEtag = (Get-NovaNodelistEtags -Cfg $Cfg)[$League.LeagueId]
     if ($knownEtag -and $haveFile) { $extraHeaders['If-None-Match'] = $knownEtag }
 
@@ -932,6 +964,9 @@ function Invoke-NovaSync {
         $Script:Metrics.leagues[$league.Key].downloaded = $down
         $Script:Metrics.total_downloaded += $down
 
+        # Not fetched on a schedule. The hub queues a changed nodelist as an
+        # ordinary packet, so the download above already collected it - see
+        # Receive-NovaNodelist for why this call is normally a no-op.
         $null = Receive-NovaNodelist -Cfg $Cfg -League $league
     }
 

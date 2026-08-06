@@ -88,6 +88,18 @@ $env:HUB_CLIENT_SECRET = '...'
 
 Environment variables win over the file.
 
+### Nodelists
+
+You do not need to do anything to keep your nodelist current, and the client does not poll for
+it. When the hub regenerates a league's nodelist it queues it as an ordinary packet addressed
+to every member BBS, so it arrives with your normal game traffic. A nodelist changes once or
+twice a year; polling for that would be pure waste.
+
+The one gap is a node that has *never* had a nodelist — freshly registered, or a rebuilt game
+directory — which would otherwise sit blind until the next regeneration. So `Sync.NodelistCheck`
+defaults to `'bootstrap'`: ask the hub directly only when there is no local nodelist at all.
+Set it to `'always'` to poll every sync anyway, or `'never'` to rely purely on the packet queue.
+
 ## Running unattended
 
 ```powershell
