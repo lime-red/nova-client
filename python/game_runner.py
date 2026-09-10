@@ -354,7 +354,10 @@ class GameRunner:
             # Use script command to capture output including ANSI codes
             import shlex
             dosemu_cmd = " ".join([shlex.quote(str(c)) for c in cmd])
-            script_cmd = ["script", "-c", dosemu_cmd, str(log_file)]
+            # -e is load-bearing: without it script(1) reports its *own* exit
+            # status, which is 0 even when dosemu died on startup, so a failed
+            # maintenance run looked successful. -e returns the child's status.
+            script_cmd = ["script", "-e", "-c", dosemu_cmd, str(log_file)]
 
             # dosemu2 refuses to start unless TERM names a terminal that can
             # clear the screen and position the cursor. Under systemd there is
