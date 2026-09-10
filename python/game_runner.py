@@ -345,10 +345,18 @@ class GameRunner:
 
         try:
             # Run dosemu with the batch file
+            # -K <dir> -E <name>, not a bare host path to the batch file.
+            #
+            # The bare-path form used to work and silently stopped: on the
+            # dosemu2 2.0pre9 / fdpp 1.10 packages from July 2026, dosemu boots,
+            # exits 0, and never executes the batch at all. Nothing in the
+            # transcript says so - the run just does no work and looks fine.
+            # -K makes the directory drive C: and -E names the program on it.
             cmd = [
                 dosemu_path,
                 "-f", str(conf_file),
-                str(batch_file),
+                "-K", str(batch_file.parent),
+                "-E", batch_file.name,
             ]
 
             # Use script command to capture output including ANSI codes
