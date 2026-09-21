@@ -345,16 +345,30 @@ class GameRunner:
 
         try:
             # Run dosemu with the batch file
+            # -K <dir> -E <name>, not a bare host path to the batch file.
+            #
+            # The bare-path form remaps C: to the batch file's own directory.
+            # This batch then does `C:` and `CD <game_dos_path>`, which no
+            # longer resolves - so the game never runs, while dosemu exits 0 and
+            # the transcript looks ordinary. Verified on novahub-hl against a
+            # March-2026 transcript from the same host and config.
+            #
+            # -K leaves C: as the configured drive_c and runs the named program
+            # from <dir>, which is what the batch has always assumed.
             cmd = [
                 dosemu_path,
                 "-f", str(conf_file),
-                str(batch_file),
+                "-K", str(batch_file.parent),
+                "-E", batch_file.name,
             ]
 
             # Use script command to capture output including ANSI codes
             import shlex
             dosemu_cmd = " ".join([shlex.quote(str(c)) for c in cmd])
-            script_cmd = ["script", "-c", dosemu_cmd, str(log_file)]
+            # -e is load-bearing: without it script(1) reports its *own* exit
+            # status, which is 0 even when dosemu died on startup, so a failed
+            # maintenance run looked successful. -e returns the child's status.
+            script_cmd = ["script", "-e", "-c", dosemu_cmd, str(log_file)]
 
             # dosemu2 refuses to start unless TERM names a terminal that can
             # clear the screen and position the cursor. Under systemd there is
