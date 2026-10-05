@@ -120,4 +120,4 @@ will keep working until the next restart, but do not leave it in that state.
 
 ## Licence
 
-See the repository for licence terms.
+MIT -- see [LICENSE](LICENSE).
