@@ -41,6 +41,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r python/requirements.txt -r python/requirements-dev.txt
 
+      # The runner image has no PowerShell, so every `shell: pwsh` step failed
+      # before running anything: this job was red on every push from the day it
+      # was added, and no Pester test ever ran in CI. Install it from the
+      # release tarball (no apt repo or sudo needed). Pinned, so a new release
+      # cannot change CI under us.
+      - name: Install PowerShell
+        run: |
+          PWSH_VERSION=7.6.6
+          mkdir -p "$HOME/.local/opt/pwsh" "$HOME/.local/bin"
+          curl -fsSL -o /tmp/pwsh.tgz \
+            "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/pwsh.tgz -C "$HOME/.local/opt/pwsh"
+          chmod +x "$HOME/.local/opt/pwsh/pwsh"
+          ln -sf "$HOME/.local/opt/pwsh/pwsh" "$HOME/.local/bin/pwsh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/pwsh" -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
       # PSScriptAnalyzer catches the class of bug that killed the old
       # run_nova_cycle.ps1: assigning to $matches, which the -match operator
       # silently clobbers. Worth having even though only the PS7 script can
