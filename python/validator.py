@@ -266,10 +266,6 @@ class ClientValidator:
             self.errors.append(ValidationError("Config", "Missing [bbs] section"))
             return False
 
-        if "leagues" not in self.config:
-            self.errors.append(ValidationError("Config", "Missing [leagues] section"))
-            return False
-
         # Validate each enabled league
         leagues = self.config.get("leagues", {})
         enabled_count = 0
@@ -316,7 +312,8 @@ class ClientValidator:
             self.warnings.append(
                 ValidationError(
                     "Config",
-                    "No enabled leagues found in configuration",
+                    "No enabled leagues configured, so nothing will sync. "
+                    "client.py --test-connection checks the hub credentials meanwhile",
                     severity="WARNING"
                 )
             )

@@ -21,6 +21,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Config sections name the game; the hub's league ids carry its letter.
+GAME_LETTERS = {"BRE": "B", "FE": "F"}
+
 
 class NovaHubClient:
     """One-shot client for syncing packets with Nova Hub"""
@@ -42,6 +45,8 @@ class NovaHubClient:
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
         config = toml.load(config_path)
+        # A BBS can be set up before it joins any league
+        config.setdefault("leagues", {})
 
         # Override with environment variables
         config["hub"]["client_id"] = os.getenv(
@@ -169,6 +174,14 @@ class NovaHubClient:
                 return self.finalize()
 
             self.token = token
+
+            if not any(
+                league_config.get("enabled", True)
+                for leagues in self.config["leagues"].values()
+                for league_config in leagues.values()
+            ):
+                self.log("INFO", "No leagues configured; nothing to sync")
+                return self.finalize()
 
             # Process each league
             for game_type, leagues in self.config["leagues"].items():
@@ -521,7 +534,7 @@ class NovaHubClient:
             async with self.session.post(url, data=data) as resp:
                 if resp.status == 200:
                     token_data = await resp.json()
-                    self.log("INFO", "OAuth token obtained")
+                    self.log("INFO", "Authenticated Successfully")
                     # Log token response (but mask the actual token for security)
                     if self.verbose:
                         masked = {**token_data, "access_token": "***masked***"}
@@ -536,6 +549,124 @@ class NovaHubClient:
         except Exception as e:
             self.log("ERROR", f"Token request exception: {e}")
             return None
+
+    def configured_leagues(self) -> Dict[str, dict]:
+        """Every league in the config, enabled or not, keyed by hub league id ("015B")."""
+        result = {}
+        for game_type, leagues in self.config["leagues"].items():
+            letter = GAME_LETTERS.get(game_type.upper())
+            if letter is None:
+                continue
+            for league_number, league_config in leagues.items():
+                result[f"{league_number}{letter}"] = {
+                    "section": f"leagues.{game_type}.{league_number}",
+                    "enabled": league_config.get("enabled", True),
+                    "bbs_index": league_config.get("bbs_index"),
+                }
+        return result
+
+    async def check_connection(self) -> int:
+        """Sign in to the hub, then compare this config's leagues with the hub's.
+
+        Syncs nothing. Returns 0 when the credentials work and nothing in the
+        config would make the hub refuse a packet.
+        """
+        hub = self.config["hub"]["url"].rstrip("/")
+        print(f"Testing the connection to {hub} as {self.config['hub']['client_id']}")
+        print()
+
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(
+            timeout=timeout, headers={"User-Agent": USER_AGENT}
+        ) as session:
+            data = {
+                "grant_type": "client_credentials",
+                "client_id": self.config["hub"]["client_id"],
+                "client_secret": self.config["hub"]["client_secret"],
+            }
+            try:
+                async with session.post(f"{hub}/service/api/v1/auth/token", data=data) as resp:
+                    status = resp.status
+                    body = await resp.json() if status == 200 else None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                print(f"FAILED   Could not reach the hub: {e or type(e).__name__}")
+                print("         Check hub.url, and that this machine can reach it.")
+                return 1
+
+            if status != 200:
+                print(f"FAILED   The hub did not authenticate this BBS (HTTP {status}).")
+                print("         " + {
+                    401: "The client ID or secret is wrong, or the BBS is disabled on the hub. "
+                         "If they came from a claim link, copy them again; otherwise ask the hub admin.",
+                    429: "Too many failed attempts from this address. Wait a few minutes and try again.",
+                    404: "Nothing answered at that address. Check hub.url points at a Nova Hub.",
+                }.get(status, "Check hub.url points at a Nova Hub."))
+                return 1
+
+            print("Authenticated Successfully")
+            headers = {"Authorization": f"Bearer {body['access_token']}"}
+
+            async with session.get(f"{hub}/service/api/v1/me", headers=headers) as resp:
+                if resp.status == 404:
+                    print()
+                    print("This hub does not report league memberships (it is older than this")
+                    print("client), so your leagues could not be checked against it.")
+                    return 0
+                if resp.status != 200:
+                    print(f"FAILED   The hub would not report this BBS's leagues (HTTP {resp.status}).")
+                    return 1
+                account = await resp.json()
+
+        return self.compare_with_hub(account)
+
+    def compare_with_hub(self, account: dict) -> int:
+        """Print how the config's leagues line up with the hub's; return 1 on any problem."""
+        problems = 0
+        print(f"The hub knows this BBS as {account['bbs_name']} ({account['client_id']})")
+
+        configured_name = self.config.get("bbs", {}).get("name", "")
+        if configured_name.strip().lower() != account["bbs_name"].strip().lower():
+            print()
+            print(f"WARNING  bbs.name is '{configured_name}', but the hub has '{account['bbs_name']}'.")
+            print("         The nodelists the hub sends use its name; the games expect the two to match.")
+
+        print()
+        hub_leagues = {league["league_id"]: league for league in account["leagues"]}
+        local = self.configured_leagues()
+
+        if not hub_leagues and not any(l["enabled"] for l in local.values()):
+            print("No leagues yet, on the hub or in this config. The connection works;")
+            print("the hub admin will add your BBS to a league and tell you its BBS index.")
+            return 0
+
+        for league_id in sorted(set(hub_leagues) | set(local)):
+            on_hub = hub_leagues.get(league_id)
+            mine = local.get(league_id)
+            if on_hub and mine is None:
+                print(f"WARNING  {league_id}  The hub has this BBS in {league_id} as #{on_hub['bbs_index']}, "
+                      f"but it is not in this config.")
+            elif on_hub and not mine["enabled"]:
+                print(f"NOTE     {league_id}  The hub has this BBS as #{on_hub['bbs_index']}; "
+                      f"[{mine['section']}] is disabled.")
+            elif on_hub and mine["bbs_index"] != on_hub["bbs_index"]:
+                problems += 1
+                print(f"ERROR    {league_id}  [{mine['section']}] has bbs_index = {mine['bbs_index']}, "
+                      f"but the hub has this BBS as #{on_hub['bbs_index']}.")
+                print("                The hub will refuse packets sent as the wrong index.")
+            elif on_hub:
+                print(f"OK       {league_id}  BBS #{on_hub['bbs_index']}")
+            elif mine["enabled"]:
+                problems += 1
+                print(f"ERROR    {league_id}  [{mine['section']}] is enabled, but the hub does not have "
+                      f"this BBS in {league_id}.")
+                print("                The hub will refuse its packets. Ask the hub admin, or disable it.")
+
+        print()
+        if problems:
+            print(f"Connection test found {problems} problem{'s' if problems != 1 else ''}.")
+            return 1
+        print("Connection test passed.")
+        return 0
 
     def finalize(self) -> int:
         """Finalize the run and output metrics"""
@@ -576,6 +707,12 @@ def main():
         action="store_true",
         help="Validate configuration without syncing packets"
     )
+    parser.add_argument(
+        "--test-connection",
+        action="store_true",
+        help="Sign in to the hub and check this config's leagues and BBS indexes "
+             "against the hub's, without syncing packets"
+    )
 
     args = parser.parse_args()
 
@@ -591,6 +728,8 @@ def main():
     # Normal operation mode
     try:
         client = NovaHubClient(args.config, verbose=args.verbose)
+        if args.test_connection:
+            sys.exit(asyncio.run(client.check_connection()))
         exit_code = asyncio.run(client.run())
         sys.exit(exit_code)
 

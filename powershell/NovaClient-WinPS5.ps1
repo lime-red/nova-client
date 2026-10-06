@@ -7,8 +7,11 @@
     A self-contained reference client for the Nova Hub Service API, written for
     Windows PowerShell 5.1 - the version that ships with Windows. Nothing to install.
 
-    Three modes:
+    Four modes:
       -Validate   Check the config (and nodes.dat) and report every problem found.
+      -TestConnection
+                  Sign in to the hub and check the config's leagues and BBS
+                  indexes against the hub's. Syncs nothing.
       -Once       Run a single sync: upload outbound packets, download inbound ones.
       -Daemon     Run continuously: sync on an interval, and run game maintenance
                   on its own interval or immediately when packets arrive.
@@ -24,6 +27,11 @@
 .PARAMETER Validate
     Validate configuration and exit. Makes no network calls.
 
+.PARAMETER TestConnection
+    Sign in to the hub with the configured credentials, then compare each
+    league and BBS index in the config with what the hub has for this BBS.
+    Syncs nothing, and works whether or not any leagues are configured.
+
 .PARAMETER Once
     Perform a single sync and exit. This is the default if no mode is given.
 
@@ -35,6 +43,9 @@
 
 .EXAMPLE
     .\NovaClient-WinPS5.ps1 -Validate
+
+.EXAMPLE
+    .\NovaClient-WinPS5.ps1 -TestConnection
 
 .EXAMPLE
     .\NovaClient-WinPS5.ps1 -Once -Verbose
@@ -64,6 +75,7 @@
 param(
     [string] $Config = (Join-Path $PSScriptRoot 'config.psd1'),
     [switch] $Validate,
+    [switch] $TestConnection,
     [switch] $Once,
     [switch] $Daemon,
     [switch] $ShowVersion

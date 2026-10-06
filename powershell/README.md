@@ -39,6 +39,7 @@ Then, in this order:
 
 ```powershell
 .\NovaClient-WinPS5.ps1 -Validate         # no network calls; checks config and nodes.dat
+.\NovaClient-WinPS5.ps1 -TestConnection   # signs in; checks each league and BbsIndex with the hub
 .\NovaClient-WinPS5.ps1 -Once -Verbose    # a single sync, showing everything
 .\NovaClient-WinPS5.ps1 -Daemon           # run continuously until Ctrl+C
 ```
@@ -55,6 +56,7 @@ powershell -ExecutionPolicy Bypass -File .\NovaClient-WinPS5.ps1 -Validate
 |---|---|
 | `-Config <path>` | Config file. Defaults to `config.psd1` beside the script. |
 | `-Validate` | Check the config and exit. Makes no network calls. |
+| `-TestConnection` | Sign in to the hub, then check each league and `BbsIndex` against what the hub has for this BBS. Syncs nothing, and works with no leagues configured. Exit `1` if the hub would refuse something. |
 | `-Once` | One sync, then exit. The default if no mode is given. |
 | `-Daemon` | Run continuously. |
 | `-Verbose` | Show DEBUG lines and full API responses. |

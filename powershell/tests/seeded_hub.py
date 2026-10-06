@@ -43,6 +43,13 @@ def seed() -> None:
         bbs_name="Test BBS",
         memberships=[{"league_id": "555B", "bbs_index": 2}],
     )
+    # Claimed, but in no league yet.
+    storage.add_client(
+        client_id="bare_client",
+        client_secret="bare_secret",
+        bbs_name="Bare BBS",
+        memberships=[],
+    )
 
     storage.packets.append(
         {
@@ -70,6 +77,13 @@ async def reset_for_test() -> dict:
     """Test-only. Exists on this wrapper, never on the real hub."""
     seed()
     return {"status": "reset"}
+
+
+@app.post("/__test__/old-hub")
+async def play_old_hub_for_test() -> dict:
+    """Test-only. Answer GET /me with a 404, as a hub from before it existed."""
+    storage.serves_account = False
+    return {"status": "old"}
 
 
 @app.post("/__test__/nodelist/{league_id}")

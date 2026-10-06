@@ -157,6 +157,20 @@ Checks:
 - nodes.dat files are parseable (if present)
 - BBS index consistency
 
+A BBS with no leagues yet passes, with a warning: it can sign in, it just has nothing to sync.
+
+### Connection Test
+
+```bash
+python client.py --test-connection
+```
+
+Signs in to the hub with the configured credentials, then compares every league and
+`bbs_index` in the config with what the hub has for this BBS. Syncs nothing, and works
+whether or not any leagues are configured. Exits 1 if the hub would refuse something: a wrong
+index, or an enabled league the BBS is not a member of. A league the hub has but the config
+does not is only a warning.
+
 ## Components
 
 | File | Description |

@@ -78,6 +78,8 @@ class MockStorage:
 
         # Nodelists: league_id -> bytes
         self.nodelists: Dict[str, bytes] = {}
+        # False plays a hub from before GET /me existed
+        self.serves_account: bool = True
 
     def add_client(
         self,
@@ -186,6 +188,26 @@ async def verify_token_endpoint(client_info: dict = Depends(verify_token)):
         bbs_name=client_info["bbs_name"],
         is_active=True,
     )
+
+
+@service_app.get("/me")
+async def who_am_i(client_info: dict = Depends(verify_token)):
+    """The BBS and its leagues, as nova-hub's GET /me reports them."""
+    if not storage.serves_account:
+        raise HTTPException(404, "Not Found")
+    leagues = []
+    for membership in client_info["memberships"]:
+        number, letter = parse_league_id(membership["league_id"])
+        leagues.append({
+            "league_id": membership["league_id"],
+            "game": "BRE" if letter == "B" else "FE",
+            "number": number,
+            "name": membership["league_id"],
+            "bbs_index": membership["bbs_index"],
+            "fidonet_address": None,
+        })
+    return {"client_id": client_info["client_id"], "bbs_name": client_info["bbs_name"],
+            "leagues": sorted(leagues, key=lambda l: l["league_id"])}
 
 
 # --- Packet Endpoints ---

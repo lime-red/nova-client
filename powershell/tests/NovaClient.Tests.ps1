@@ -367,11 +367,80 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
         }
     }
 
+    Context 'connection test' {
+        It 'signs in and agrees with the hub' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'Authenticated Successfully'
+            $r.Output | Should -Match 'OK\s+555B\s+BBS #2'
+            $r.Output | Should -Match 'Connection test passed'
+        }
+
+        It 'reports a BbsIndex the hub does not have' {
+            (Get-Content $Script:Ws.Config -Raw).Replace('BbsIndex    = 2', 'BbsIndex    = 3') |
+                Set-Content $Script:Ws.Config
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection')
+            $r.ExitCode | Should -Be 1
+            $r.Output | Should -Match 'BbsIndex = 3, but the hub has this BBS as #2'
+        }
+
+        It 'says when the secret is wrong' {
+            (Get-Content $Script:Ws.Config -Raw).Replace("'test_secret'", "'nope'") |
+                Set-Content $Script:Ws.Config
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection')
+            $r.ExitCode | Should -Be 1
+            $r.Output | Should -Not -Match 'Authenticated Successfully'
+            $r.Output | Should -Match 'client ID or secret is wrong'
+        }
+
+        It 'skips the league check against a hub without GET /me' {
+            $null = Invoke-RestMethod -Method Post -Uri "$Script:HubUrl/__test__/old-hub" -TimeoutSec 5
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'could not be checked'
+        }
+
+        It 'will not combine with another mode' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection', '-Once')
+            $r.ExitCode | Should -Be 2
+        }
+    }
+
+    Context 'a BBS in no league yet' {
+        BeforeEach {
+            # What the claim page hands out before the BBS joins a league.
+            $text = (Get-Content $Script:Ws.Config -Raw).Replace("'test_client'", "'bare_client'")
+            $text = $text.Replace("'test_secret'", "'bare_secret'").Replace("'Test BBS'", "'Bare BBS'")
+            $text = $text.Substring(0, $text.IndexOf('Leagues = @(')) + "Leagues = @()`n}`n"
+            Set-Content -LiteralPath $Script:Ws.Config -Value $text
+        }
+
+        It 'passes validation with a warning' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'No enabled leagues configured'
+        }
+
+        It 'proves the credentials with -TestConnection' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-TestConnection')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'Authenticated Successfully'
+            $r.Output | Should -Match 'No leagues yet, on the hub or in this config'
+        }
+
+        It 'signs in and stops on a sync' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'Authenticated Successfully'
+            $r.Output | Should -Match 'No leagues configured; nothing to sync'
+        }
+    }
+
     Context 'sync' {
         It 'authenticates and completes a run with nothing to do' {
             $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
             $r.ExitCode | Should -Be 0
-            $r.Output | Should -Match 'OAuth token obtained'
+            $r.Output | Should -Match 'Authenticated Successfully'
             $r.Output | Should -Match 'Run Summary'
         }
 
@@ -615,7 +684,7 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
                 # The token is good for 24 hours. Invoke-NovaSync used to pass
                 # -Force, so every cycle re-authenticated - the cache existed but
                 # nothing ever hit it.
-                ([regex]::Matches($output, 'OAuth token obtained')).Count |
+                ([regex]::Matches($output, 'Authenticated Successfully')).Count |
                     Should -Be 1 -Because 'the token should be cached across cycles'
             }
             finally {

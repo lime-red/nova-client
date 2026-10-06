@@ -40,6 +40,7 @@ Copy-Item config.psd1.example config.psd1
 notepad config.psd1                       # fill in URL, credentials, BbsIndex, directories
 
 .\NovaClient-WinPS5.ps1 -Validate         # check everything before touching the network
+.\NovaClient-WinPS5.ps1 -TestConnection   # sign in, and check leagues and indexes with the hub
 .\NovaClient-WinPS5.ps1 -Once -Verbose    # one sync, with detail
 .\NovaClient-WinPS5.ps1 -Daemon           # run continuously
 ```
@@ -55,6 +56,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp config.toml.example config.toml        # then edit it
 
 .venv/bin/python client.py --validate
+.venv/bin/python client.py --test-connection   # sign in, and check leagues and indexes with the hub
 .venv/bin/python client.py --verbose      # one sync
 .venv/bin/python daemon.py --verbose      # run continuously
 ```

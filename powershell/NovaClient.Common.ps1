@@ -61,8 +61,8 @@
       $Script:RuntimeLabel               shown by -ShowVersion, e.g. 'PowerShell 5.1'
       $Script:OriginalProgressPreference restored on exit
 
-    and must expose the parameters $Config, $Validate, $Once, $Daemon and
-    $ShowVersion, because the entry point at the bottom of this file reads
+    and must expose the parameters $Config, $Validate, $TestConnection, $Once,
+    $Daemon and $ShowVersion, because the entry point at the bottom of this file reads
     them from the caller's scope.
 
 .NOTES
@@ -439,7 +439,7 @@ function Get-NovaToken {
 
     $Script:Token = $data.access_token
     $Script:TokenExpiresAt = Get-NovaJwtExpiry $data.access_token
-    Write-NovaLog INFO 'OAuth token obtained'
+    Write-NovaLog INFO 'Authenticated Successfully'
     if ($VerbosePreference -eq 'Continue') {
         # Never log the token itself.
         Write-NovaApiResponse (@{
@@ -935,11 +935,16 @@ function Invoke-NovaSync {
     }
 
     # No -Force. The token is good for 24 hours, so re-authenticating every
-    # cycle just to say "OAuth token obtained" again is pointless chatter and a
+    # cycle just to say "Authenticated Successfully" again is pointless chatter and a
     # pointless round trip - and Invoke-NovaApi already re-auths once on a 401,
     # which is the case that actually matters.
     if ($null -eq (Get-NovaToken -Cfg $Cfg)) {
         Write-NovaLog ERROR 'Authentication failed; no leagues will be synced'
+        return Complete-NovaRun -Cfg $Cfg
+    }
+
+    if (@(Get-NovaLeagues -Cfg $Cfg).Count -eq 0) {
+        Write-NovaLog INFO 'No leagues configured; nothing to sync'
         return Complete-NovaRun -Cfg $Cfg
     }
 
@@ -1239,6 +1244,137 @@ function Test-NovaNodesFile {
     }
 }
 
+function Test-NovaConnection {
+    <#
+        Signs in to the hub, then compares the config's leagues with what the
+        hub has for this BBS (GET /me). Syncs nothing. Returns 0 when the
+        credentials work and nothing in the config would make the hub refuse a
+        packet, 1 when something would, 2 when the hub settings are missing.
+        The Python client's --test-connection prints the same report.
+    #>
+    param([hashtable] $Cfg)
+
+    $hub = [string](Get-NovaSetting $Cfg 'Hub.Url' '')
+    $clientId = [string](Get-NovaSetting $Cfg 'Hub.ClientId' '')
+    $secret = [string](Get-NovaSetting $Cfg 'Hub.ClientSecret' '')
+    if (-not $hub -or -not $clientId -or -not $secret) {
+        Write-NovaLog ERROR 'Hub.Url, Hub.ClientId and Hub.ClientSecret must all be set'
+        return 2
+    }
+    $hub = $hub.TrimEnd('/')
+
+    Write-Host "Testing the connection to $hub as $clientId"
+    Write-Host ''
+
+    $body = @{ grant_type = 'client_credentials'; client_id = $clientId; client_secret = $secret }
+    $result = Invoke-NovaRequest -Method 'POST' -Uri "$hub/service/api/v1/auth/token" -Body $body `
+        -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 30
+
+    if ($result.Transport -or $result.StatusCode -eq 0) {
+        Write-Host "FAILED   Could not reach the hub: $($result.Detail)" -ForegroundColor Red
+        Write-Host '         Check Hub.Url, and that this machine can reach it.'
+        return 1
+    }
+    $data = $null
+    if ($result.Ok) { $data = ConvertFrom-NovaJson $result.Content }
+    if ($null -eq $data -or -not $data.access_token) {
+        $hint = switch ($result.StatusCode) {
+            401 { 'The client ID or secret is wrong, or the BBS is disabled on the hub. If they came from a claim link, copy them again; otherwise ask the hub admin.' }
+            429 { 'Too many failed attempts from this address. Wait a few minutes and try again.' }
+            404 { 'Nothing answered at that address. Check Hub.Url points at a Nova Hub.' }
+            default { 'Check Hub.Url points at a Nova Hub.' }
+        }
+        Write-Host "FAILED   The hub did not authenticate this BBS (HTTP $($result.StatusCode))." -ForegroundColor Red
+        Write-Host "         $hint"
+        return 1
+    }
+
+    Write-Host 'Authenticated Successfully' -ForegroundColor Green
+
+    $me = Invoke-NovaRequest -Method 'GET' -Uri "$hub/service/api/v1/me" -TimeoutSec 30 `
+        -Headers @{ Authorization = "Bearer $($data.access_token)" }
+    if ($me.StatusCode -eq 404) {
+        Write-Host ''
+        Write-Host 'This hub does not report league memberships (it is older than this'
+        Write-Host 'client), so your leagues could not be checked against it.'
+        return 0
+    }
+    $account = $null
+    if ($me.Ok) { $account = ConvertFrom-NovaJson $me.Content }
+    if ($null -eq $account) {
+        Write-Host "FAILED   The hub would not report this BBS's leagues (HTTP $($me.StatusCode))." -ForegroundColor Red
+        return 1
+    }
+    return Compare-NovaLeagues -Cfg $Cfg -Account $account
+}
+
+function Compare-NovaLeagues {
+    <# Prints how the config's leagues line up with the hub's; returns 1 on any problem. #>
+    param([hashtable] $Cfg, $Account)
+
+    $problems = 0
+    Write-Host "The hub knows this BBS as $($Account.bbs_name) ($($Account.client_id))"
+
+    # -ne on strings ignores case, which is what the games do too.
+    $configuredName = [string](Get-NovaSetting $Cfg 'Bbs.Name' '')
+    if ($configuredName.Trim() -ne ([string]$Account.bbs_name).Trim()) {
+        Write-Host ''
+        Write-Host "WARNING  Bbs.Name is '$configuredName', but the hub has '$($Account.bbs_name)'." -ForegroundColor Yellow
+        Write-Host '         The nodelists the hub sends use its name; the games expect the two to match.'
+    }
+    Write-Host ''
+
+    $onHub = @{}
+    foreach ($league in @($Account.leagues)) { $onHub[[string]$league.league_id] = $league }
+    $local = @{}
+    $anyEnabled = $false
+    foreach ($league in @(Get-NovaLeagues -Cfg $Cfg -IncludeDisabled)) {
+        if (-not $league.LeagueId) { continue }
+        $local[$league.LeagueId] = $league
+        if ($league.Enabled) { $anyEnabled = $true }
+    }
+
+    if ($onHub.Count -eq 0 -and -not $anyEnabled) {
+        Write-Host 'No leagues yet, on the hub or in this config. The connection works;'
+        Write-Host 'the hub admin will add your BBS to a league and tell you its BBS index.'
+        return 0
+    }
+
+    $ids = @(@($onHub.Keys) + @($local.Keys) | Sort-Object -Unique)
+    foreach ($id in $ids) {
+        $hubLeague = $onHub[$id]
+        $mine = $local[$id]
+        if ($hubLeague -and -not $mine) {
+            Write-Host "WARNING  $id  The hub has this BBS in $id as #$($hubLeague.bbs_index), but it is not in the config." -ForegroundColor Yellow
+        }
+        elseif ($hubLeague -and -not $mine.Enabled) {
+            Write-Host "NOTE     $id  The hub has this BBS as #$($hubLeague.bbs_index); the league is disabled in the config."
+        }
+        elseif ($hubLeague -and "$($mine.BbsIndex)" -ne "$($hubLeague.bbs_index)") {
+            $problems++
+            Write-Host "ERROR    $id  The config has BbsIndex = $($mine.BbsIndex), but the hub has this BBS as #$($hubLeague.bbs_index)." -ForegroundColor Red
+            Write-Host '                The hub will refuse packets sent as the wrong index.'
+        }
+        elseif ($hubLeague) {
+            Write-Host "OK       $id  BBS #$($hubLeague.bbs_index)" -ForegroundColor Green
+        }
+        elseif ($mine.Enabled) {
+            $problems++
+            Write-Host "ERROR    $id  The league is enabled in the config, but the hub does not have this BBS in $id." -ForegroundColor Red
+            Write-Host '                The hub will refuse its packets. Ask the hub admin, or disable it.'
+        }
+    }
+
+    Write-Host ''
+    if ($problems -gt 0) {
+        $plural = if ($problems -eq 1) { '' } else { 's' }
+        Write-Host "Connection test found $problems problem$plural." -ForegroundColor Red
+        return 1
+    }
+    Write-Host 'Connection test passed.' -ForegroundColor Green
+    return 0
+}
+
 function Show-NovaValidation {
     param($Result)
 
@@ -1410,6 +1546,10 @@ function Invoke-NovaMain {
         return 2
     }
 
+    # Before validation: proving the credentials must not wait on directories
+    # and nodes files that may not be set up yet.
+    if ($TestConnection) { return Test-NovaConnection -Cfg $cfg }
+
     $validation = Test-NovaConfig -Cfg $cfg
     if ($Validate) {
         return $(if (Show-NovaValidation $validation) { 0 } else { 2 })
@@ -1477,8 +1617,8 @@ function Invoke-NovaEntryPoint {
         silently flattened to success until this was hoisted into a function
         that returns instead. The launcher does the exiting.
     #>
-    if ($Daemon -and $Once) {
-        Write-NovaLog ERROR 'Specify only one of -Once or -Daemon'
+    if (@($Validate, $TestConnection, $Once, $Daemon | Where-Object { $_ }).Count -gt 1) {
+        Write-NovaLog ERROR 'Specify only one of -Validate, -TestConnection, -Once or -Daemon'
         return 2
     }
 

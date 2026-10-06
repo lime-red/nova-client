@@ -5,6 +5,31 @@ All notable changes to Nova Client are documented here.
 Versions before 0.2.0 were never tagged; 0.2.0 was applied retroactively to the last
 Python-only release, which is the code that had been running in production.
 
+## [Unreleased]
+
+### Added
+
+- **Connection test**: `client.py --test-connection` and `-TestConnection`. Signs in to the
+  hub, says "Authenticated Successfully" or why not (unreachable, wrong ID or secret, rate
+  limited), then compares each league and BBS index in the config with what the hub has for
+  this BBS (the hub's new `GET /service/api/v1/me`). A wrong index or a league the BBS is not
+  in fails; a league missing from the config, or a `bbs.name` that differs from the hub's,
+  warns. Syncs nothing. Against an older hub without `/me` it signs in and skips the league
+  check.
+- MIT licence, and `tools/release.sh` to publish a tag's CHANGELOG section as a release.
+
+### Changed
+
+- A config with no leagues is valid: a BBS that has claimed its credentials but is not in a
+  league yet can sign in. `--validate` and `-Validate` warn instead of failing, and a sync
+  signs in, logs "No leagues configured; nothing to sync" and exits 0.
+- A successful sign-in logs "Authenticated Successfully" (was "OAuth token obtained").
+
+### Fixed
+
+- Python: a config with no `[leagues]` section crashed with a KeyError straight after
+  signing in.
+
 ## [0.3.0] — 2026-08-06
 
 Nova Client becomes multi-language. The Python client is unchanged in behaviour but has
