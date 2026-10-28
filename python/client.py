@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,7 +25,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Config sections name the game; the hub's league ids carry its letter.
-GAME_LETTERS = {"BRE": "B", "FE": "F"}
+GAME_LETTERS = {"BRE": "B", "FE": "F", "IB": "I"}
+
+# The file each game reads its league roster from, in its own folder.
+NODES_FILES = {"BRE": "brnodes.dat", "FE": "fenodes.dat", "IB": "ibnodes.dat"}
+
+# Immortal Barons names a packet once and never again, so its sent archive
+# grows forever unless pruned, and a name already in inbound is never
+# replaced. BRE and FE wrap their sequence numbers and reuse names.
+NAMES_NEVER_REPEAT = {"IB"}
+DEFAULT_ARCHIVE_DAYS = 30
 
 # The hub refuses larger uploads, so a larger download is not a packet.
 MAX_PACKET_SIZE = 10 * 1024 * 1024
@@ -40,8 +50,21 @@ TOKEN_MARGIN = timedelta(seconds=60)
 SENT_ACTIONS = ("delete", "archive")
 
 # fullmatch, not match with $: $ also matches before a trailing newline.
+# BRE and FE: 555B0201.001, league + game + source + dest (hex) . sequence
 PACKET_NAME = re.compile(r"[0-9]{3}[BF][0-9A-F]{4}\.[0-9]{3}", re.IGNORECASE)
-NODELIST_NAME = re.compile(r"(BR|FE)NODES\.[0-9]{3}", re.IGNORECASE)
+# Immortal Barons: L555-2-<sequence>-1.brp, nodes and a 13-digit sequence in
+# base 36, without leading zeros on the nodes; destination 0 is a broadcast,
+# which the hub hands to every board in the league.
+IB_PACKET_NAME = re.compile(
+    r"L(?P<league>[0-9]{3})-(?P<src>[1-9A-Z][0-9A-Z]?)-[0-9A-Z]{13}-(?:0|[1-9A-Z][0-9A-Z]?)\.BRP",
+    re.IGNORECASE,
+)
+NODELIST_NAME = re.compile(r"(BR|FE|IB)NODES\.[0-9]{3}", re.IGNORECASE)
+
+
+def is_packet_name(name: str) -> bool:
+    """A packet of any game, by its filename alone."""
+    return bool(PACKET_NAME.fullmatch(name) or IB_PACKET_NAME.fullmatch(name))
 
 
 def hub_league_id(game_type: str, league_number: str) -> str:
@@ -49,7 +72,7 @@ def hub_league_id(game_type: str, league_number: str) -> str:
     letter = GAME_LETTERS.get(game_type.upper())
     if letter is None:
         raise ValueError(
-            f"[leagues.{game_type}.{league_number}]: unknown game '{game_type}' (use BRE or FE)"
+            f"[leagues.{game_type}.{league_number}]: unknown game '{game_type}' (use BRE, FE or IB)"
         )
     return f"{league_number}{letter}"
 
@@ -65,7 +88,7 @@ def unprocessed_packets(inbound_dir) -> List[str]:
         names = [p.name for p in Path(inbound_dir).iterdir() if p.is_file()]
     except OSError:
         return []
-    return sorted(n for n in names if PACKET_NAME.fullmatch(n) or NODELIST_NAME.fullmatch(n))
+    return sorted(n for n in names if is_packet_name(n) or NODELIST_NAME.fullmatch(n))
 
 
 class ResponseTooLarge(Exception):
@@ -131,6 +154,11 @@ class NovaHubClient:
             # Anything else left each packet in outbound, to be sent again every sync
             raise ValueError(
                 f"sync.sent_action must be 'delete' or 'archive', got '{sent_action}'"
+            )
+        archive_days = config.get("sync", {}).get("archive_days", DEFAULT_ARCHIVE_DAYS)
+        if isinstance(archive_days, bool) or not isinstance(archive_days, int) or archive_days < 0:
+            raise ValueError(
+                f"sync.archive_days must be a whole number of days (0 keeps all), got {archive_days!r}"
             )
 
         # Validate that each enabled league has bbs_index configured (as integer, 1-255)
@@ -210,8 +238,8 @@ class NovaHubClient:
         if safe_name in (".", "..", ""):
             raise ValueError(f"Invalid filename: {filename}")
 
-        # A packet (555B0102.001) or a nodelist (BRNODES.555, FENODES.013)
-        if not (PACKET_NAME.fullmatch(safe_name) or NODELIST_NAME.fullmatch(safe_name)):
+        # A packet (555B0102.001, L555-2-<seq>-1.BRP) or a nodelist (BRNODES.555)
+        if not (is_packet_name(safe_name) or NODELIST_NAME.fullmatch(safe_name)):
             raise ValueError(f"Filename does not match expected format: {filename}")
 
         return safe_name
@@ -368,6 +396,9 @@ class NovaHubClient:
                     "ERROR", f"Failed to upload: {packet_file.name}", league_number
                 )
                 self.metrics["leagues"][f"{game_type}_{league_number}"]["errors"] += 1
+
+        if uploaded and game_type.upper() in NAMES_NEVER_REPEAT:
+            self.prune_archive(league_number)
 
         return uploaded
 
@@ -539,7 +570,19 @@ class NovaHubClient:
                 self.metrics["leagues"][f"{game_type}_{league_number}"]["errors"] += 1
                 continue
 
-            success = await self.download_packet(game_type, league_number, filename, inbound_dir)
+            dest_file = self.download_destination(game_type, filename, inbound_dir, league_config)
+            if dest_file is None:
+                self.log(
+                    "ERROR",
+                    f"Not downloading {filename}: game_folder is not set, and "
+                    f"{NODES_FILES[game_type.upper()]} belongs there",
+                    league_number,
+                )
+                self.metrics["leagues"][f"{game_type}_{league_number}"]["errors"] += 1
+                continue
+            success = await self.download_packet(
+                game_type, league_number, filename, inbound_dir, dest_file=dest_file
+            )
             if success:
                 downloaded += 1
             else:
@@ -573,8 +616,25 @@ class NovaHubClient:
             self.log_api_response(body.decode(errors="replace"), "list packets error")
         return []
 
+    @staticmethod
+    def download_destination(
+        game_type: str, filename: str, inbound_dir: Path, league_config: dict
+    ) -> Optional[Path]:
+        """Where a file from the hub goes: inbound, except an IB roster.
+
+        BRE and FE take their nodelist in from inbound. Immortal Barons reads
+        packets only (*.brp) and its roster from ibnodes.dat in its data
+        directory, which is game_folder; it will not exchange packets without
+        one. None if that is where it belongs and game_folder is not set.
+        """
+        if game_type.upper() == "IB" and NODELIST_NAME.fullmatch(filename):
+            game_folder = league_config.get("game_folder")
+            return Path(game_folder) / NODES_FILES["IB"] if game_folder else None
+        return Path(inbound_dir) / filename
+
     async def download_packet(
-        self, game_type: str, league_number: str, filename: str, inbound_dir: Path
+        self, game_type: str, league_number: str, filename: str, inbound_dir: Path,
+        dest_file: Optional[Path] = None,
     ) -> bool:
         """Download a single packet from the hub.
 
@@ -582,6 +642,11 @@ class NovaHubClient:
         truncated file would be the only copy this BBS ever gets. It is written
         to a .part file and renamed into place only once it is complete; the
         game never sees a partial packet.
+
+        A game whose packet names never repeat (IB) never has one replaced:
+        the same bytes already waiting are the same packet, and different
+        bytes under that name are kept and the download refused, rather than
+        renamed (.br1) where the game would never read it.
         """
         # Defense-in-depth: validate filename even though caller should sanitize
         try:
@@ -605,7 +670,24 @@ class NovaHubClient:
                 self.log_api_response(body.decode(errors="replace"), "download error")
             return False
 
-        dest_file = inbound_dir / filename
+        if dest_file is None:
+            dest_file = inbound_dir / filename
+        if game_type.upper() in NAMES_NEVER_REPEAT and is_packet_name(filename) and dest_file.exists():
+            try:
+                same = dest_file.read_bytes() == body
+            except OSError as e:
+                self.log("ERROR", f"Could not read {dest_file}: {e}", league_number)
+                return False
+            if same:
+                self.log("INFO", f"Downloaded: {filename}, already in inbound", league_number)
+                return True
+            self.log(
+                "ERROR",
+                f"{filename} is already in inbound with different contents; kept that one. "
+                "The hub keeps its copy",
+                league_number,
+            )
+            return False
         part_file = dest_file.with_name(dest_file.name + ".part")
         try:
             part_file.write_bytes(body)
@@ -637,8 +719,8 @@ class NovaHubClient:
                 return
 
             dest = archive_dir / safe_name
-            # Sequence numbers wrap at 999 and restart after a game reset, so
-            # the archive often has this name already. os.replace overwrites
+            # BRE and FE sequence numbers wrap at 999 and restart after a game
+            # reset, so the archive often has this name already. os.replace overwrites
             # it, where rename raises on Windows; shutil.move handles an
             # archive on another drive or mount.
             try:
@@ -647,15 +729,54 @@ class NovaHubClient:
                 shutil.move(str(packet_file), str(dest))
             self.log("DEBUG", f"Archived: {safe_name}")
 
+    def prune_archive(self, league_number: Optional[str] = None) -> int:
+        """Delete archived packets of games that never reuse a name, once old.
+
+        BRE and FE overwrite their archive as names come round again; IB's
+        would grow forever. sync.archive_days, default 30; 0 keeps them all.
+        """
+        sync = self.config.get("sync", {})
+        if sync.get("sent_action", "delete") != "archive":
+            return 0
+        days = sync.get("archive_days", DEFAULT_ARCHIVE_DAYS)
+        if not days:
+            return 0
+        archive_dir = Path(sync.get("archive_dir", "./sent"))
+        cutoff = time.time() - days * 86400
+        removed = 0
+        try:
+            entries = list(archive_dir.iterdir())
+        except OSError:
+            return 0
+        for entry in entries:
+            if not IB_PACKET_NAME.fullmatch(entry.name):
+                continue
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+                    removed += 1
+            except OSError as e:
+                self.log("WARNING", f"Could not prune {entry}: {e}", league_number)
+        if removed:
+            self.log("INFO", f"Pruned {removed} archived packet(s) older than {days} days", league_number)
+        return removed
+
     def is_packet_file(
         self, filename: str, game_type: str, league_number: str, league_config: dict
     ) -> bool:
         """Check if a file is a valid packet file for this league"""
-        # Pattern: <league><game><source><dest>.<seq>
-        # Example: 555B0102.001
         letter = GAME_LETTERS.get(game_type.upper())
         if letter is None:
             return False
+        our_bbs_index = league_config.get("bbs_index")
+        if letter == "I":
+            # L555-2-<seq>-1.brp: the source is in base 36
+            match = IB_PACKET_NAME.fullmatch(filename)
+            if not match or match["league"] != league_number:
+                return False
+            return our_bbs_index is not None and int(match["src"], 36) == our_bbs_index
+        # Pattern: <league><game><source><dest>.<seq>
+        # Example: 555B0102.001
         pattern = rf"{league_number}{letter}([0-9A-F]{{2}})[0-9A-F]{{2}}\.\d{{3}}"
         match = re.fullmatch(pattern, filename, re.IGNORECASE)
 
@@ -664,7 +785,6 @@ class NovaHubClient:
 
         # Validate that source BBS index matches our league's BBS index
         source_hex = match.group(1).upper()
-        our_bbs_index = league_config.get("bbs_index")
         our_bbs_hex = format(our_bbs_index, "02X") if our_bbs_index else None
 
         return source_hex == our_bbs_hex

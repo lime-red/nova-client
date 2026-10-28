@@ -12,13 +12,14 @@ Validates:
 import os
 import platform
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import toml
 
-from client import GAME_LETTERS, SENT_ACTIONS
-from game_runner import GameRunner, check_command
+from client import DEFAULT_ARCHIVE_DAYS, GAME_LETTERS, NODES_FILES, SENT_ACTIONS
+from game_runner import GameRunner, check_command, is_native
 from nodes_parser import NodesFileParser
 
 
@@ -173,7 +174,7 @@ class ClientValidator:
             return
 
         # Determine expected nodes file name
-        nodes_filename = "brnodes.dat" if game_type.upper() == "BRE" else "fenodes.dat"
+        nodes_filename = NODES_FILES.get(game_type.upper(), "brnodes.dat")
 
         # Find file case-insensitively
         nodes_file = self.find_file_case_insensitive(game_folder_path, nodes_filename)
@@ -204,7 +205,10 @@ class ClientValidator:
                 )
             return
 
-        self.check_routing(league_key, nodes_filename, parser)
+        # Immortal Barons' roster has no HOST lines: every board sends to its
+        # destination, and the client hands everything to the hub regardless.
+        if game_type.upper() != "IB":
+            self.check_routing(league_key, nodes_filename, parser)
 
         # Check for duplicate indices
         duplicates = parser.check_duplicate_indices()
@@ -304,8 +308,21 @@ class ClientValidator:
         league_key = f"{game_type}.{league_id}"
         if game_type.upper() not in GAME_LETTERS:
             self.errors.append(
-                ValidationError("Config", f"{league_key}: unknown game '{game_type}' (use BRE or FE)")
+                ValidationError("Config", f"{league_key}: unknown game '{game_type}' (use BRE, FE or IB)")
             )
+        runner = league_config.get("runner")
+        if runner not in (None, "native"):
+            self.errors.append(
+                ValidationError("Config", f"{league_key}: runner must be \"native\" or left out, got {runner!r}")
+            )
+        if is_native(game_type, league_config) and league_config.get("game_folder"):
+            # Run directly, so it has to be there to run; dosemu finds a DOS
+            # game's command in the DOS drive instead.
+            command = league_config.get("game_command", game_type)
+            if not (Path(command).is_file() and os.access(command, os.X_OK)) and not shutil.which(command):
+                self.errors.append(
+                    ValidationError("Config", f"{league_key}: game_command {command!r} is not a program this machine can run")
+                )
         bbs_index = league_config.get("bbs_index")
         # bool is an int to Python: bbs_index = true would be BBS 1
         if bbs_index is not None and (
@@ -340,6 +357,12 @@ class ClientValidator:
         if sent_action not in SENT_ACTIONS:
             self.errors.append(
                 ValidationError("Config", f"sync.sent_action must be 'delete' or 'archive', got '{sent_action}'")
+            )
+
+        archive_days = self.config.get("sync", {}).get("archive_days", DEFAULT_ARCHIVE_DAYS)
+        if isinstance(archive_days, bool) or not isinstance(archive_days, int) or archive_days < 0:
+            self.errors.append(
+                ValidationError("Config", f"sync.archive_days must be a whole number of days (0 keeps all), got {archive_days!r}")
             )
 
         drives = self.config.get("daemon", {}).get("dosemu_drives") or {}
