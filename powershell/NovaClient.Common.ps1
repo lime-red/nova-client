@@ -279,6 +279,10 @@ function Get-NovaLeagues {
         $bbsIndex = $null
         if ($league.ContainsKey('BbsIndex')) { $bbsIndex = $league.BbsIndex }
 
+        $gameFolder = Get-NovaSetting $league 'GameFolder'
+        # IB's -data is its data directory, which is GameFolder
+        $defaultArgs = if ($game -ieq 'IB') { '-maint -data {0}' -f $gameFolder } else { 'PLANETARY' }
+
         $result += [pscustomobject]@{
             Game            = $game.ToUpperInvariant()
             Number          = $number
@@ -289,9 +293,9 @@ function Get-NovaLeagues {
             Key             = '{0}_{1}' -f $game.ToUpperInvariant(), $number
             OutboundDir     = Get-NovaSetting $league 'OutboundDir'
             InboundDir      = Get-NovaSetting $league 'InboundDir'
-            GameFolder      = Get-NovaSetting $league 'GameFolder'
+            GameFolder      = $gameFolder
             GameCommand     = Get-NovaSetting $league 'GameCommand' $game.ToUpperInvariant()
-            MaintenanceArgs = Get-NovaSetting $league 'MaintenanceArgs' 'PLANETARY'
+            MaintenanceArgs = Get-NovaSetting $league 'MaintenanceArgs' $defaultArgs
         }
     }
     return $result
@@ -308,8 +312,31 @@ function Get-NovaLeagues {
 # ============================================================================
 
 # \z, not $: in .NET, $ also matches before a trailing newline.
-$Script:PacketPattern   = '^[0-9]{3}[BF][0-9A-Fa-f]{4}\.[0-9]{3}\z'
-$Script:NodelistPattern = '^(BR|FE)NODES\.[0-9]{3}\z'
+# BRE and FE: 555B0201.001. Immortal Barons: L555-2-<sequence>-1.brp, nodes and
+# a 13-digit sequence in base 36; destination 0 is a broadcast, which the hub
+# hands to every board. -match ignores case, as the games do.
+$Script:IbPacketPattern = '^L(?<league>[0-9]{3})-(?<src>[1-9A-Z][0-9A-Z]?)-[0-9A-Z]{13}-(0|[1-9A-Z][0-9A-Z]?)\.BRP\z'
+$Script:PacketPattern   = '^([0-9]{3}[BF][0-9A-Fa-f]{4}\.[0-9]{3}|L[0-9]{3}-[1-9A-Z][0-9A-Z]?-[0-9A-Z]{13}-(0|[1-9A-Z][0-9A-Z]?)\.BRP)\z'
+$Script:NodelistPattern = '^(BR|FE|IB)NODES\.[0-9]{3}\z'
+
+# Per game: the nodelist the hub sends, and the file the game reads its
+# roster from in its own folder.
+$Script:NodelistPrefix = @{ BRE = 'BRNODES'; FE = 'FENODES'; IB = 'IBNODES' }
+$Script:NodesFile = @{ BRE = 'brnodes.dat'; FE = 'fenodes.dat'; IB = 'ibnodes.dat' }
+
+# Immortal Barons names a packet once and never again: one already in inbound
+# is never replaced, and its sent archive is pruned by age (Sync.ArchiveDays).
+# BRE and FE wrap their sequence numbers and reuse names.
+$Script:NamesNeverRepeat = @('IB')
+
+function ConvertFrom-NovaBase36 {
+    param([string] $Digits)
+    $value = 0
+    foreach ($c in $Digits.ToUpperInvariant().ToCharArray()) {
+        $value = $value * 36 + '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.IndexOf($c)
+    }
+    return $value
+}
 
 # cmd.exe gives these a meaning of its own: chaining, redirection, variables.
 # None belongs in a game command or its arguments, which run as "cmd /c ...".
@@ -350,6 +377,13 @@ function Test-NovaPacketFile {
         rejects it with 403 anyway, so catching it here saves a round trip.
     #>
     param([string] $Filename, $League)
+
+    if ($League.Game -eq 'IB') {
+        $ib = [regex]::Match($Filename, $Script:IbPacketPattern, 'IgnoreCase')
+        if (-not $ib.Success -or $ib.Groups['league'].Value -ne $League.Number) { return $false }
+        return ($League.BbsIndex -is [int]) -and
+            ((ConvertFrom-NovaBase36 $ib.Groups['src'].Value) -eq $League.BbsIndex)
+    }
 
     $gameLetter = $League.Game.Substring(0, 1)
     $pattern = '^{0}{1}([0-9A-F]{{2}})[0-9A-F]{{2}}\.\d{{3}}\z' -f
@@ -595,6 +629,32 @@ function Complete-NovaSentFile {
     }
 }
 
+function Remove-NovaOldArchive {
+    <#
+        Deletes archived packets of games that never reuse a name, once older
+        than Sync.ArchiveDays (default 30; 0 keeps them all). BRE and FE
+        overwrite their archive as names come round again; IB's would grow
+        forever.
+    #>
+    param([hashtable] $Cfg)
+
+    if ((Get-NovaSetting $Cfg 'Sync.SentAction' 'delete') -ne 'archive') { return 0 }
+    $days = [int](Get-NovaSetting $Cfg 'Sync.ArchiveDays' 30)
+    if ($days -le 0) { return 0 }
+    $archiveDir = Get-NovaSetting $Cfg 'Sync.ArchiveDir' '.\sent'
+    if (-not (Test-Path -LiteralPath $archiveDir -PathType Container)) { return 0 }
+
+    $cutoff = (Get-Date).AddDays(-$days)
+    $removed = 0
+    foreach ($file in @(Get-ChildItem -LiteralPath $archiveDir -File -ErrorAction SilentlyContinue)) {
+        if ($file.Name -notmatch $Script:IbPacketPattern -or $file.LastWriteTime -ge $cutoff) { continue }
+        try { Remove-Item -LiteralPath $file.FullName -Force; $removed++ }
+        catch { Write-NovaLog WARN "Could not prune $($file.FullName): $($_.Exception.Message)" }
+    }
+    if ($removed -gt 0) { Write-NovaLog INFO "Pruned $removed archived packet(s) older than $days days" }
+    return $removed
+}
+
 function Get-NovaPacketList {
     param([hashtable] $Cfg, $League, [switch] $UnreadOnly)
 
@@ -621,12 +681,22 @@ function Receive-NovaPacket {
         serves it - so a crash between "server marked it read" and "file landed
         on disk" loses the packet permanently. A half-written file that the game
         then tries to parse is the worse of the two outcomes.
+
+        A game whose packet names never repeat (IB) never has one replaced: the
+        same bytes already waiting are the same packet, and different bytes
+        under that name are kept and the download refused, rather than renamed
+        (.br1) where the game would never read it.
+
+        -DestinationPath overrides where the file lands: IB's roster goes to
+        ibnodes.dat in GameFolder.
     #>
-    param([hashtable] $Cfg, $League, [string] $Filename, [string] $DestinationDir)
+    param([hashtable] $Cfg, $League, [string] $Filename, [string] $DestinationDir,
+        [string] $DestinationPath)
 
     $safeName = Get-SafeNovaFilename $Filename
-    $finalPath = Join-Path $DestinationDir $safeName
+    $finalPath = if ($DestinationPath) { $DestinationPath } else { Join-Path $DestinationDir $safeName }
     $partPath = "$finalPath.part"
+    $keepExisting = ($League.Game -in $Script:NamesNeverRepeat) -and ($safeName -match $Script:PacketPattern)
 
     $url = '{0}/service/api/v1/leagues/{1}/packets/{2}' -f
         (Get-NovaSetting $Cfg 'Hub.Url').TrimEnd('/'), $League.LeagueId, $safeName
@@ -641,11 +711,22 @@ function Receive-NovaPacket {
         return $false
     }
 
+    if ($keepExisting -and (Test-Path -LiteralPath $finalPath)) {
+        $same = Test-NovaBytesEqual ([IO.File]::ReadAllBytes($partPath)) ([IO.File]::ReadAllBytes($finalPath))
+        Remove-Item -LiteralPath $partPath -Force
+        if ($same) {
+            Write-NovaLog INFO "Downloaded $safeName, already in inbound" $League.Key
+            return $true
+        }
+        Write-NovaLog ERROR "$safeName is already in inbound with different contents; kept that one. The hub keeps its copy" $League.Key
+        return $false
+    }
+
     try {
         Move-Item -LiteralPath $partPath -Destination $finalPath -Force
     }
     catch {
-        Write-NovaLog ERROR "Could not move $safeName into $DestinationDir : $($_.Exception.Message)" $League.Key
+        Write-NovaLog ERROR "Could not move $safeName to $finalPath : $($_.Exception.Message)" $League.Key
         return $false
     }
 
@@ -780,7 +861,7 @@ function Receive-NovaNodelist {
         return $false
     }
 
-    $prefix = if ($League.Game -eq 'BRE') { 'BRNODES' } else { 'FENODES' }
+    $prefix = $Script:NodelistPrefix[$League.Game]
     $safeName = Get-SafeNovaFilename ('{0}.{1}' -f $prefix, $League.Number)
 
     $url = '{0}/service/api/v1/leagues/{1}/nodelist' -f
@@ -795,12 +876,18 @@ function Receive-NovaNodelist {
     # Found case-insensitively: DOS-era files, casing on disk anyone's guess.
     # The game's own nodes file is the nodelist once taken in; one waiting in
     # inbound is a nodelist not taken in yet.
-    $gameNodes = if ($League.Game -eq 'BRE') { 'brnodes.dat' } else { 'fenodes.dat' }
+    $gameNodes = $Script:NodesFile[$League.Game]
     $installed = Get-ChildItem -LiteralPath $League.GameFolder -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ieq $gameNodes } | Select-Object -First 1
     $pending = Get-ChildItem -LiteralPath $League.InboundDir -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ieq $safeName } | Select-Object -First 1
     if ($pending) { $finalPath = $pending.FullName; $partPath = "$finalPath.part" }
+    # IB takes no nodelist from inbound: it reads ibnodes.dat itself
+    if ($League.Game -eq 'IB') {
+        $pending = $null
+        $finalPath = Join-Path $League.GameFolder $gameNodes
+        $partPath = "$finalPath.part"
+    }
     $haveFile = [bool]($installed -or $pending)
 
     $mode = Get-NovaSetting $Cfg 'Sync.NodelistCheck' 'bootstrap'
@@ -908,6 +995,9 @@ function Invoke-NovaLeagueUpload {
             $Script:Metrics.leagues[$League.Key].errors++
         }
     }
+    if ($uploaded -gt 0 -and $League.Game -in $Script:NamesNeverRepeat) {
+        $null = Remove-NovaOldArchive -Cfg $Cfg
+    }
     return $uploaded
 }
 
@@ -936,7 +1026,19 @@ function Invoke-NovaLeagueDownload {
             continue
         }
 
-        if (Receive-NovaPacket -Cfg $Cfg -League $League -Filename $safeName -DestinationDir $League.InboundDir) {
+        # IB reads packets only (*.brp); its roster is ibnodes.dat in its data
+        # directory, GameFolder, and it will not exchange packets without one.
+        $destination = $null
+        if ($League.Game -eq 'IB' -and $safeName -match $Script:NodelistPattern) {
+            if (-not $League.GameFolder) {
+                Write-NovaLog ERROR "Not downloading ${safeName}: GameFolder is not set, and ibnodes.dat belongs there" $League.Key
+                $Script:Metrics.leagues[$League.Key].errors++
+                continue
+            }
+            $destination = Join-Path $League.GameFolder $Script:NodesFile['IB']
+        }
+
+        if (Receive-NovaPacket -Cfg $Cfg -League $League -Filename $safeName -DestinationDir $League.InboundDir -DestinationPath $destination) {
             $downloaded++
         }
         else {
@@ -1189,6 +1291,11 @@ function Test-NovaConfig {
     $bbsName = Get-NovaSetting $Cfg 'Bbs.Name'
     if (-not $bbsName) { $null = $problems.Add('Bbs.Name is not set') }
 
+    $archiveDays = Get-NovaSetting $Cfg 'Sync.ArchiveDays' 30
+    if ($archiveDays -isnot [int] -or $archiveDays -lt 0) {
+        $null = $problems.Add("Sync.ArchiveDays must be a whole number of days (0 keeps all), got '$archiveDays'")
+    }
+
     $leagues = @(Get-NovaLeagues -Cfg $Cfg)
     if ($leagues.Count -eq 0) { $null = $warnings.Add('No enabled leagues configured') }
 
@@ -1200,8 +1307,13 @@ function Test-NovaConfig {
     foreach ($league in $leagues) {
         $label = $league.Key
 
-        if (-not $league.Game -or $league.Game -notin @('BRE', 'FE')) {
-            $null = $problems.Add("${label}: Game must be 'BRE' or 'FE'")
+        if (-not $league.Game -or $league.Game -notin @('BRE', 'FE', 'IB')) {
+            $null = $problems.Add("${label}: Game must be 'BRE', 'FE' or 'IB'")
+        }
+        if ($league.Game -eq 'IB' -and $league.GameFolder -and
+            -not (Test-Path -LiteralPath $league.GameCommand -PathType Leaf) -and
+            -not (Get-Command $league.GameCommand -CommandType Application -ErrorAction SilentlyContinue)) {
+            $null = $problems.Add("${label}: GameCommand is not a program this machine can run: $($league.GameCommand)")
         }
         if ($league.Number -notmatch '^\d{3}$') {
             $null = $problems.Add("${label}: Number must be exactly 3 digits (e.g. '015')")
@@ -1239,7 +1351,9 @@ function Test-NovaConfig {
             # which is a miserable failure to chase. Map a drive letter, or keep
             # the game local.
             if ($pair.Value -match '^\\\\') {
-                if ($pair.Name -eq 'GameFolder') {
+                # Immortal Barons is a native program and can use one
+                if ($pair.Name -eq 'GameFolder' -and $league.Game -eq 'IB') { }
+                elseif ($pair.Name -eq 'GameFolder') {
                     $null = $problems.Add("${label}: GameFolder must not be a UNC path - the DOS game cannot use one. Map a drive letter instead: $($pair.Value)")
                 }
                 else {
@@ -1287,7 +1401,8 @@ function Test-NovaNodesFile {
     param($League, [string] $BbsName, $Problems, $Warnings)
 
     $label = $League.Key
-    $expected = if ($League.Game -eq 'BRE') { 'brnodes.dat' } else { 'fenodes.dat' }
+    $expected = $Script:NodesFile[$League.Game]
+    if (-not $expected) { return }
 
     $nodesFile = Get-ChildItem -LiteralPath $League.GameFolder -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ieq $expected } | Select-Object -First 1
@@ -1312,6 +1427,9 @@ function Test-NovaNodesFile {
         $indexLine = $lines[$i].Trim()
         $name = if ($i + 1 -lt $lines.Count) { $lines[$i + 1].Trim() } else { '' }
         $i += 6
+        # ibnodes.dat's optional seventh line, a board's signing key. Only a
+        # key: a file with no blank line between entries has the next index there.
+        if ($i -lt $lines.Count -and $lines[$i].Trim() -match '^[0-9A-F]{64}\z') { $i++ }
 
         # The index line may carry routing info: "1 HOST 2 3 4", which is how
         # the hub's own entry is written. Take the first token as the index.
@@ -1341,7 +1459,9 @@ function Test-NovaNodesFile {
     # every HOST line is sent to directly, past the hub (nova-client #19).
     $direct = @($entries.Keys | Where-Object { -not $hosts.ContainsKey($_) -and -not $routed.ContainsKey($_) } |
         Sort-Object)
-    if ($direct.Count -gt 0) {
+    # Immortal Barons' roster has no HOST lines: the client hands everything
+    # to the hub regardless.
+    if ($direct.Count -gt 0 -and $League.Game -ne 'IB') {
         $null = $Warnings.Add("${label}: no HOST line in $($nodesFile.Name) routes for $($direct -join ', '), so the game sends to them directly rather than through the hub")
     }
 

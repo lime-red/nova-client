@@ -11,6 +11,7 @@ packet we need waiting for us in order to test downloading.
 
 Run:  python powershell/tests/seeded_hub.py [port]   (default 8000)
 Then: test_client / test_secret, league 555B, BBS index 2
+  or: ib_client / ib_secret, league 555I (Immortal Barons), BBS index 2
 """
 
 import sys
@@ -26,6 +27,11 @@ from mock_server import app, storage  # noqa: E402
 
 # A packet from BBS 01 addressed to us (02), waiting to be collected.
 PAYLOAD = bytes(range(256)) * 4
+
+IB_PACKET = "L555-3-0000000000005-2.BRP"
+IB_PAYLOAD = b'{"FromNode": 3, "ToNode": 2, "Seq": 5}'
+IB_ROSTER = (b"1\r\nNova Hub\r\n1:1/1\r\nBrisbane\r\nQLD\r\nAUS\r\n" + b"ab" * 32 + b"\r\n\r\n"
+             b"2\r\nTest BBS\r\n1:2/3\r\nSomewhere\r\nSomestate\r\nSomewhere\r\n" + b"cd" * 32 + b"\r\n")
 
 
 def seed() -> None:
@@ -70,6 +76,30 @@ def seed() -> None:
 
     # Format is 6 lines per entry plus a blank separator.
     storage.add_nodelist("555B", b"2\nTest BBS\n1:2/3\n\n\n\n\n")
+
+    # Immortal Barons, league 555I: ib_client is board 2 beside boards 3 and 4.
+    # A packet from board 3 waits for it, and the hub's roster, published to
+    # it as IBNODES.555, which the client installs as ibnodes.dat.
+    storage.add_client("ib_client", "ib_secret", "Test BBS",
+                       [{"league_id": "555I", "bbs_index": 2}])
+    for index in (3, 4):
+        storage.add_client(f"ib_{index}", "x", f"Board {index}",
+                           [{"league_id": "555I", "bbs_index": index}])
+    storage.packets.append({
+        "id": storage.next_packet_id,
+        "filename": IB_PACKET,
+        "league_number": "555",
+        "game_type": "I",
+        "source": "03",
+        "dest": "02",
+        "sequence": 5,
+        "received_at": datetime.now(),
+        "retrieved_at": None,
+        "file_size": len(IB_PAYLOAD),
+        "file_data": IB_PAYLOAD,
+    })
+    storage.next_packet_id += 1
+    storage.queue_nodelist("555I", IB_ROSTER, "02")
 
 
 @app.post("/__test__/reset")
