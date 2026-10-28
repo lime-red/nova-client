@@ -728,6 +728,21 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             Test-Path (Join-Path $Script:Ws.Inbound $Script:IbPacket) | Should -BeTrue
         }
 
+        It 'records the Coordinator''s key as coord.pub, as -coord-key does' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            $pub = Join-Path $Script:Ws.Game 'coord.pub'
+            [IO.File]::ReadAllText($pub) | Should -BeExactly (('c0' * 32) + "`n")
+        }
+
+        It 'leaves a recorded Coordinator key alone' {
+            $pub = Join-Path $Script:Ws.Game 'coord.pub'
+            [IO.File]::WriteAllText($pub, ('ab' * 32) + "`n")
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            [IO.File]::ReadAllText($pub) | Should -BeExactly (('ab' * 32) + "`n")
+        }
+
         It 'says why it leaves a packet named without node numbers' {
             $stray = Join-Path $Script:Ws.Outbound 'L555-ABCDEFGHIJKLMNOP.brp'
             [IO.File]::WriteAllBytes($stray, [byte[]](1..16))

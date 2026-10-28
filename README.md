@@ -100,7 +100,9 @@ from the sent archive after `archive_days` (default 30) instead of letting names
 Nodelists are `BRNODES.<league>` / `FENODES.<league>` / `IBNODES.<league>`. The hub generates
 them; clients only ever download them. BRE and FE take theirs in from inbound; the clients
 install IB's as `ibnodes.dat` in the game folder, IB's data directory, where IB reads it --
-but only when there is none, since IB keeps that file current itself.
+but only when there is none, since IB keeps that file current itself. The same goes for the
+League Coordinator's public key: the clients fetch it from the hub and record it as
+`coord.pub`, which is what `immortal-barons -coord-key` would do by hand.
 
 ## Repository layout
 

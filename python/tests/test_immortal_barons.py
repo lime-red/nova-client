@@ -10,6 +10,8 @@ What differs from BRE and FE, and why:
   game_folder, IB's data directory: IB will not exchange packets without it.
   Only where there is none, though: IB rewrites the file itself from the
   Coordinator's signed roster, and the hub's copy must not replace that.
+- The Coordinator's public key comes from the hub, recorded as coord.pub in
+  game_folder as `-coord-key` would; only where there is none, like the roster.
 - IB is a native program: maintenance runs it directly, never under dosemu.
 """
 
@@ -173,6 +175,44 @@ def test_a_packet_named_without_nodes_is_warned_about(ib, capsys):
     assert "no ibnodes.dat yet" in capsys.readouterr().out
 
 
+COORD = "c0" * 32
+
+
+def test_the_coordinator_key_is_recorded_as_coord_pub(ib):
+    ib["storage"].coordinator_keys["555I"] = COORD
+    assert sync(ib) == 0
+    # Exactly what immortal-barons -coord-key writes
+    assert (ib["game_folder"] / "coord.pub").read_text() == COORD + "\n"
+
+
+def test_a_recorded_coordinator_key_is_left_alone_and_not_asked_for(ib):
+    (ib["game_folder"] / "coord.pub").write_text("ab" * 32 + "\n")
+    ib["storage"].coordinator_keys["555I"] = COORD
+    sync(ib)
+    assert (ib["game_folder"] / "coord.pub").read_text() == "ab" * 32 + "\n"
+    assert ib["storage"].coordinator_key_requests == 0
+
+
+def test_the_coordinator_itself_is_not_given_a_key(ib):
+    (ib["game_folder"] / "coord.key").write_text("private")
+    ib["storage"].coordinator_keys["555I"] = COORD
+    sync(ib)
+    assert not (ib["game_folder"] / "coord.pub").exists()
+    assert ib["storage"].coordinator_key_requests == 0
+
+
+def test_no_coordinator_key_at_the_hub_is_a_warning_not_a_failure(ib, capsys):
+    assert sync(ib) == 0
+    assert not (ib["game_folder"] / "coord.pub").exists()
+    assert "no Coordinator key" in capsys.readouterr().out
+
+
+def test_a_bad_coordinator_key_from_the_hub_is_not_written(ib):
+    ib["storage"].coordinator_keys["555I"] = "not a key"
+    sync(ib)
+    assert not (ib["game_folder"] / "coord.pub").exists()
+
+
 def test_old_archived_ib_packets_are_pruned(ib):
     old, recent = ib_name(2, 1, 1), ib_name(2, 2, 1)
     keep_sr = "555B0201.001"
@@ -307,6 +347,14 @@ def test_validator_wants_a_game_command_it_can_run(ib):
 def test_validator_says_ibnodes_dat_comes_from_the_hub(ib):
     _, warnings = validate(ib, game_command=sys.executable)
     assert any("ibnodes.dat not found" in w for w in warnings)
+
+
+def test_validator_says_coord_pub_comes_from_the_hub(ib):
+    _, warnings = validate(ib, game_command=sys.executable)
+    assert any("no coord.pub" in w for w in warnings)
+    (ib["game_folder"] / "coord.pub").write_text(KEY + "\n")
+    _, warnings = validate(ib, game_command=sys.executable)
+    assert not any("coord.pub" in w for w in warnings)
 
 
 def test_validator_refuses_an_unknown_runner(ib):

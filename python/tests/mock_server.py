@@ -55,6 +55,11 @@ class PacketUploadResponse(BaseModel):
     packet_id: int
 
 
+class CoordinatorKeyResponse(BaseModel):
+    league_id: str
+    public_key: str
+
+
 # --- In-Memory Storage ---
 
 class MockStorage:
@@ -79,6 +84,10 @@ class MockStorage:
 
         # Nodelists: league_id -> bytes
         self.nodelists: Dict[str, bytes] = {}
+        # IB Coordinator public keys: league_id -> 64 hex
+        self.coordinator_keys: Dict[str, str] = {}
+        # Calls to the coordinator-key endpoint, so a test can see it was not asked
+        self.coordinator_key_requests: int = 0
         # False plays a hub from before GET /me existed
         self.serves_account: bool = True
 
@@ -481,6 +490,21 @@ async def download_packet(
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename={normalized_filename}"}
     )
+
+
+@service_app.get("/leagues/{league_id}/coordinator-key", response_model=CoordinatorKeyResponse)
+async def coordinator_key(
+    league_id: str = PathParam(..., pattern=LEAGUE_ID_PATTERN),
+    client_info: dict = Depends(verify_token),
+):
+    """An IB league's Coordinator public key, as the hub serves it."""
+    storage.coordinator_key_requests += 1
+    if not any(m["league_id"].upper() == league_id.upper() for m in client_info["memberships"]):
+        raise HTTPException(403, f"Client is not a member of league {league_id}")
+    key = storage.coordinator_keys.get(league_id.upper())
+    if key is None:
+        raise HTTPException(404, f"The hub has no Coordinator key for league {league_id}")
+    return {"league_id": league_id.upper(), "public_key": key}
 
 
 @service_app.get("/leagues/{league_id}/nodelist")

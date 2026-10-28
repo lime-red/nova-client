@@ -29,6 +29,11 @@ GAME_LETTERS = {"BRE": "B", "FE": "F", "IB": "I"}
 
 # The file each game reads its league roster from, in its own folder.
 NODES_FILES = {"BRE": "brnodes.dat", "FE": "fenodes.dat", "IB": "ibnodes.dat"}
+# Immortal Barons' Coordinator key files, in its data directory (game_folder):
+# what -coord-key records, and the private half only the Coordinator holds.
+IB_COORD_PUB = "coord.pub"
+IB_COORD_KEY = "coord.key"
+IB_KEY = re.compile(r"[0-9a-f]{64}")
 
 # Immortal Barons names a packet once and never again, so its sent archive
 # grows forever unless pruned, and a name already in inbound is never
@@ -328,6 +333,9 @@ class NovaHubClient:
             "errors": 0,
         }
 
+        if game_type.upper() == "IB" and not self.upload_only:
+            await self.record_coordinator_key(game_type, league_number, league_config)
+
         # Step 1: Upload outbound packets
         uploaded = await self.upload_outbound(game_type, league_number, league_config)
         self.metrics["leagues"][league_key]["uploaded"] = uploaded
@@ -346,6 +354,70 @@ class NovaHubClient:
             "INFO",
             f"League {league_number}: Uploaded {uploaded}, Downloaded {downloaded}",
         )
+
+    async def record_coordinator_key(
+        self, game_type: str, league_number: str, league_config: dict
+    ) -> bool:
+        """Record the League Coordinator's public key for an IB board that has none.
+
+        A board refuses the league's signed rules and roster until it holds
+        the key, and the game will not take it from a packet. The hub, which
+        is the Coordinator, serves it over this client's own authenticated
+        connection; it is written as coord.pub in game_folder, exactly as
+        `immortal-barons -coord-key` writes it. An existing coord.pub is never
+        replaced: the key changes only when the league changes Coordinator,
+        and that is a sysop's decision. A board holding coord.key is the
+        Coordinator and needs nothing.
+
+        True if the board has a key when this returns.
+        """
+        game_folder = league_config.get("game_folder")
+        if not game_folder:
+            return False
+        folder = Path(game_folder)
+        if (folder / IB_COORD_PUB).exists() or (folder / IB_COORD_KEY).exists():
+            return True
+
+        league_id = hub_league_id(game_type, league_number)
+        try:
+            status, body = await self._request(
+                "GET", f"/leagues/{league_id}/coordinator-key", league_number, max_bytes=4096
+            )
+        except ResponseTooLarge as e:
+            self.log("ERROR", f"Coordinator key: the hub's reply is too large ({e})", league_number)
+            return False
+        if status == 404:
+            self.log(
+                "WARNING",
+                "The hub has no Coordinator key for this league yet, so the game will "
+                "refuse the league's rules and roster; asking again next sync",
+                league_number,
+            )
+            return False
+        if status != 200:
+            if status is not None:
+                self.log("ERROR", f"Coordinator key: request failed ({status})", league_number)
+            return False
+        try:
+            key = str(json.loads(body)["public_key"]).strip().lower()
+        except (ValueError, KeyError, TypeError):
+            self.log("ERROR", "Coordinator key: the hub's reply is not what it should be", league_number)
+            return False
+        if not IB_KEY.fullmatch(key):
+            self.log("ERROR", "Coordinator key: the hub sent something that is not a key", league_number)
+            return False
+
+        dest = folder / IB_COORD_PUB
+        part = dest.with_name(dest.name + ".part")
+        try:
+            part.write_text(key + "\n", encoding="ascii")
+            os.replace(part, dest)
+        except OSError as e:
+            self.log("ERROR", f"Could not write {dest}: {e}", league_number)
+            part.unlink(missing_ok=True)
+            return False
+        self.log("INFO", f"Recorded the League Coordinator's key in {dest}", league_number)
+        return True
 
     async def upload_outbound(
         self, game_type: str, league_number: str, league_config: dict
