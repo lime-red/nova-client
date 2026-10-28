@@ -691,6 +691,80 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
         }
     }
 
+    Context 'Immortal Barons' {
+        BeforeEach {
+            # The same workspace as an IB league: board 2 of 555I, whose roster
+            # (ibnodes.dat) the hub supplies, and a GameCommand that exists.
+            $gameCommand = (Get-Command pwsh, powershell.exe -CommandType Application -ErrorAction SilentlyContinue |
+                    Select-Object -First 1).Source
+            (Get-Content $Script:Ws.Config -Raw).
+                Replace("Game        = 'BRE'", "Game        = 'IB'").
+                Replace("ClientId     = 'test_client'", "ClientId     = 'ib_client'").
+                Replace("ClientSecret = 'test_secret'", "ClientSecret = 'ib_secret'").
+                Replace("GameFolder  =", "GameCommand = '$gameCommand'`n            GameFolder  =") |
+                Set-Content $Script:Ws.Config
+            Remove-Item -LiteralPath (Join-Path $Script:Ws.Game 'BRNODES.DAT')
+            $Script:IbPacket = 'L555-3-0000000000005-2.BRP'
+        }
+
+        It 'downloads a packet into inbound and installs the roster as ibnodes.dat' {
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            Test-Path (Join-Path $Script:Ws.Inbound $Script:IbPacket) | Should -BeTrue
+            $roster = Join-Path $Script:Ws.Game 'ibnodes.dat'
+            Test-Path $roster | Should -BeTrue
+            (Get-Content $roster -Raw) | Should -Match 'Nova Hub'
+            Test-Path (Join-Path $Script:Ws.Inbound 'IBNODES.555') | Should -BeFalse -Because 'IB reads only *.brp from inbound'
+        }
+
+        It 'uploads its own packets, a broadcast too, and leaves other boards'' alone' {
+            $ours = Join-Path $Script:Ws.Outbound 'L555-2-0000000000001-0.brp'
+            $theirs = Join-Path $Script:Ws.Outbound 'L555-3-0000000000001-0.brp'
+            [IO.File]::WriteAllBytes($ours, [byte[]](1..16))
+            [IO.File]::WriteAllBytes($theirs, [byte[]](1..16))
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            Test-Path $ours | Should -BeFalse
+            Test-Path (Join-Path $Script:Ws.Archive 'L555-2-0000000000001-0.brp') | Should -BeTrue
+            Test-Path $theirs | Should -BeTrue -Because 'it is not ours to send'
+        }
+
+        It 'never replaces a packet already waiting in inbound' {
+            $waiting = Join-Path $Script:Ws.Inbound $Script:IbPacket
+            Set-Content -LiteralPath $waiting -Value 'what was here' -NoNewline
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.Output | Should -Match 'different contents; kept that one'
+            Get-Content $waiting -Raw | Should -Be 'what was here'
+            @(Get-ChildItem $Script:Ws.Inbound).Count | Should -Be 1 -Because 'nothing is renamed beside it'
+        }
+
+        It 'prunes archived packets older than ArchiveDays' {
+            $old = Join-Path $Script:Ws.Archive 'L555-2-0000000000001-1.brp'
+            $bre = Join-Path $Script:Ws.Archive '555B0201.001'
+            foreach ($file in @($old, $bre)) {
+                Set-Content -LiteralPath $file -Value 'x'
+                (Get-Item $file).LastWriteTime = (Get-Date).AddDays(-31)
+            }
+            [IO.File]::WriteAllBytes((Join-Path $Script:Ws.Outbound 'L555-2-0000000000002-1.brp'), [byte[]](1..16))
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            Test-Path $old | Should -BeFalse
+            Test-Path $bre | Should -BeTrue -Because 'BRE overwrites its own archive'
+            Test-Path (Join-Path $Script:Ws.Archive 'L555-2-0000000000002-1.brp') | Should -BeTrue
+        }
+
+        It 'validates an IB league with its roster, without a HOST warning' {
+            $null = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 0
+            $r.Output | Should -Match 'Configuration is valid'
+            $r.Output | Should -Not -Match 'HOST'
+        }
+    }
+
     Context 'safety' {
         It 'refuses to start a second instance against the same config' {
             # Hoist out of $_ before the Start-Job: $_ does not survive into a

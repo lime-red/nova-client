@@ -9,6 +9,10 @@ name = "My BBS"
 [sync]
 sent_action = "archive"
 archive_dir = "./sent"
+# Immortal Barons never reuses a packet name, so its archived packets are
+# deleted once this many days old. 0 keeps them. BRE and FE overwrite their
+# own as names come round again.
+archive_days = 30
 max_retries = 3
 retry_delay = 5
 timeout_seconds = 120
@@ -85,3 +89,18 @@ game_folder = "C:\\BBS\\FE"
 game_command = "FE"
 maintenance_args = "PLANETARY"
 game_dos_path = "C:\\BBS\\FE"
+
+# Example Immortal Barons league configuration. IB is a native program, so it
+# runs directly on Linux too, never under dosemu. game_folder is its data
+# directory (-data), where the client installs the hub's roster as
+# ibnodes.dat; inbound_dir and outbound_dir are bbs.cfg's GameInbound and
+# GameOutbound.
+#[leagues.IB.016]
+#enabled = true
+#bbs_index = 2
+#runner = "native"
+#game_folder = "/opt/immortal-barons/ib_016"
+#inbound_dir = "/opt/immortal-barons/ib_016/inbound"
+#outbound_dir = "/opt/immortal-barons/ib_016/outbound"
+#game_command = "/opt/immortal-barons/immortal-barons"
+#maintenance_args = "-maint -data /opt/immortal-barons/ib_016"

@@ -7,6 +7,32 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
+Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support (nova-hub
+#100, after 0.9.0).
+
+### Added
+
+- **Immortal Barons** (`[leagues.IB.<n>]`, `Game = 'IB'`), nova-hub #100:
+  - Its packets, `L555-2-<seq>-1.brp`, upload and download beside BRE and FE. A broadcast
+    (destination 0) is uploaded once; the hub hands it to every board.
+  - The hub's roster, `IBNODES.<n>`, is installed as `ibnodes.dat` in the game folder, IB's
+    data directory: IB reads it there and won't exchange packets without one.
+  - IB never reuses a packet name, so one already in inbound is never replaced (the same
+    bytes count as delivered; different bytes are kept and logged), and IB packets in the
+    sent archive are deleted after `sync.archive_days` / `Sync.ArchiveDays` (default 30;
+    0 keeps them).
+  - Maintenance runs IB directly, on Linux too: `runner = "native"`, default arguments
+    `-maint -data <game_folder>`. A non-zero exit, as IB gives after a new transport fault,
+    fails the run with IB's last lines; the Linux log is in `log_dir`.
+  - Validation knows IB: `ibnodes.dat` with its optional key line, no HOST-line warning,
+    and a `game_command` that has to exist.
+
+### Changed
+
+- `openapi/service-api.json` is regenerated from nova-hub main after #100 (0.9.0 plus
+  Immortal Barons), and the mock hub follows it: league ids ending `I`, IB names, a row per
+  board for a broadcast, 409 for a different packet under a used name, and `expires_in`.
+
 ## [0.5.0] — 2026-10-28
 
 Linux nodes whose BBS runs its games from a redirected DOS drive can now run maintenance.

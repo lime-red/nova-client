@@ -1,8 +1,8 @@
 # Nova Client
 
 Syncs BBS door-game packets with a [Nova Hub](https://github.com/lime-red/nova-hub), and runs
-game maintenance when packets arrive. Supports **Barren Realms Elite** and **Falcon's Eye**
-inter-BBS leagues.
+game maintenance when packets arrive. Supports **Barren Realms Elite**, **Falcon's Eye** and
+**Immortal Barons** inter-BBS leagues.
 
 There are two independent implementations. **Pick one — you do not need both.** They speak
 the same API to the same hub and behave the same way; they differ only in what has to be
@@ -14,7 +14,7 @@ installed on the machine.
 | **Runs on** | Linux, Windows | Windows |
 | **Needs** | Python 3.12+, `pip install -r requirements.txt` | nothing — Windows PowerShell 5.1 ships with Windows |
 | **Config file** | `config.toml` | `config.psd1` |
-| **Runs the game via** | native `.EXE` on Windows, dosemu on Linux | native `.EXE` |
+| **Runs the game via** | native `.EXE` on Windows, dosemu on Linux (IB natively) | native `.EXE` |
 | **Runs unattended as** | systemd service ([`linux/`](linux/)) | Scheduled Task (`Install-NovaClientTask.ps1`) |
 
 Both implementations:
@@ -23,8 +23,8 @@ Both implementations:
 - upload the packets your game has written for other BBSes,
 - download the packets addressed to you,
 - keep your league nodelist up to date,
-- and (in daemon mode) run `BRE PLANETARY` / `FE PLANETARY` on a schedule or as soon as
-  packets arrive.
+- and (in daemon mode) run `BRE PLANETARY` / `FE PLANETARY` / `immortal-barons -maint` on a
+  schedule or as soon as packets arrive.
 
 ## Getting started
 
@@ -84,8 +84,22 @@ The hub checks that the **source** index matches the client uploading it, and th
 rejected with a `403` — that is far and away the most common setup problem, and both clients'
 `-Validate` / `--validate` modes check for it before you hit the network.
 
-Nodelists are `BRNODES.<league>` / `FENODES.<league>`. The hub generates them; clients only
-ever download them.
+Immortal Barons names its packets differently, and never uses a name twice:
+
+```
+L555-2-000000000002s-1.brp
+ │   │ │             └── destination board, base 36; 0 = every board (a broadcast)
+ │   │ └──────────────── sequence number, 13 digits in base 36
+ │   └────────────────── source board, base 36
+ └────────────────────── league number, 3 digits
+```
+
+So the clients never replace an IB packet already waiting in inbound, and prune IB packets
+from the sent archive after `archive_days` (default 30) instead of letting names overwrite.
+
+Nodelists are `BRNODES.<league>` / `FENODES.<league>` / `IBNODES.<league>`. The hub generates
+them; clients only ever download them. BRE and FE take theirs in from inbound; the clients
+install IB's as `ibnodes.dat` in the game folder, IB's data directory, where IB reads it.
 
 ## Repository layout
 

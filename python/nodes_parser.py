@@ -1,5 +1,5 @@
 """
-Parser for BRE/FE nodes.dat files
+Parser for BRE/FE nodes.dat files, and Immortal Barons' ibnodes.dat
 
 File format:
 Each BBS entry consists of 6 lines followed by a blank line:
@@ -9,7 +9,8 @@ Each BBS entry consists of 6 lines followed by a blank line:
 4. City (string)
 5. State/Province (string)
 6. Country (string)
-7. Blank line (separator)
+7. Immortal Barons only, optional: the board's signing public key (64 hex)
+8. Blank line (separator)
 
 The routing format on line 1 is: "{int} HOST {int} {int}..."
 where the first integer is the BBS index and subsequent integers are routing targets.
@@ -19,6 +20,7 @@ two read the same files, and a client that rejects what the hub accepts just
 blocks a node from starting.
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -35,6 +37,12 @@ class BBSNode:
     country: str
     line_number: int  # Track where this entry started in the file
     routing_targets: List[int] = field(default_factory=list)  # From "N HOST x y z" format
+    public_key: str = ""  # ibnodes.dat's optional seventh line
+
+
+# Only a key is taken as a seventh line: a BRE/FE file with no blank line
+# between entries has the next entry's index there.
+PUBLIC_KEY_LINE = re.compile(r"[0-9a-fA-F]{64}")
 
 
 class NodesFileParser:
@@ -144,6 +152,10 @@ class NodesFileParser:
 
             # Move to next entry (skip the 6 lines + blank line separator)
             i += 6
+            if i < len(lines) and PUBLIC_KEY_LINE.fullmatch(lines[i].strip()):
+                if self.nodes and self.nodes[-1].line_number == start_line:
+                    self.nodes[-1].public_key = lines[i].strip()
+                i += 1
             # Skip blank lines between entries
             while i < len(lines) and lines[i].strip() == '':
                 i += 1

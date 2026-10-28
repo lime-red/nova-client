@@ -39,6 +39,10 @@
         # stays put and is retried on the next cycle.
         SentAction = 'archive'
         ArchiveDir = '.\sent'
+        # Immortal Barons never reuses a packet name, so its archived packets
+        # are deleted once this many days old. 0 keeps them. BRE and FE
+        # overwrite their own as names come round again.
+        ArchiveDays = 30
 
         MaxRetries        = 3
         RetryDelaySeconds = 5
@@ -120,6 +124,21 @@
         #     GameFolder      = 'C:\BBS\DOORS\FE_015'
         #     GameCommand     = 'FE'
         #     MaintenanceArgs = 'PLANETARY'
+        # }
+
+        # Immortal Barons. GameFolder is its data directory (-data), where the
+        # client installs the hub's roster as ibnodes.dat; InboundDir and
+        # OutboundDir are bbs.cfg's GameInbound and GameOutbound.
+        # @{
+        #     Game    = 'IB'
+        #     Number  = '016'
+        #     Enabled = $true
+        #     BbsIndex = 2
+        #     OutboundDir = 'C:\immortal-barons\ib_016\outbound'
+        #     InboundDir  = 'C:\immortal-barons\ib_016\inbound'
+        #     GameFolder      = 'C:\immortal-barons\ib_016'
+        #     GameCommand     = 'C:\immortal-barons\immortal-barons.exe'
+        #     MaintenanceArgs = '-maint -data C:\immortal-barons\ib_016'
         # }
     )
 }

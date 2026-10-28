@@ -1,15 +1,17 @@
 # game_runner.py
 """
-Cross-platform game runner for BRE and Falcon's Eye.
+Cross-platform game runner for BRE, Falcon's Eye and Immortal Barons.
 
 Handles running game maintenance commands on both Windows (direct .EXE)
-and Linux (via dosemu). Includes locking to prevent concurrent execution
-with automatic queuing.
+and Linux (via dosemu, or directly for a native game such as Immortal
+Barons). Includes locking to prevent concurrent execution with automatic
+queuing.
 """
 
 import asyncio
 import os
 import platform
+import shlex
 import signal
 import sys
 from dataclasses import dataclass, field
@@ -41,6 +43,23 @@ def check_command(league_config: dict, game_type: str) -> str:
         if bad:
             return f"{key} contains {bad!r}, which the command shell would act on"
     return ""
+
+
+# Games that are native programs, not DOS doors: never run under dosemu.
+NATIVE_GAMES = {"IB"}
+
+
+def is_native(game_type: str, league_config: dict) -> bool:
+    """Run this league's game directly rather than under dosemu?"""
+    return game_type.upper() in NATIVE_GAMES or league_config.get("runner") == "native"
+
+
+def default_maintenance_args(game_type: str, game_folder: str) -> str:
+    """What maintenance runs when maintenance_args is not set."""
+    if game_type.upper() == "IB":
+        # -data: IB's data directory, which is game_folder
+        return f"-maint -data {game_folder}"
+    return "PLANETARY"
 
 
 @dataclass
@@ -148,7 +167,9 @@ class GameRunner:
 
         # Get command configuration
         game_command = league_config.get("game_command", game_type)
-        maintenance_args = league_config.get("maintenance_args", "PLANETARY")
+        maintenance_args = league_config.get(
+            "maintenance_args", default_maintenance_args(game_type, game_folder)
+        )
 
         # Build full command string for logging
         full_command = f"{game_command} {maintenance_args}"
@@ -185,6 +206,11 @@ class GameRunner:
                 if self.is_windows:
                     result = await self._run_windows(
                         game_folder_path, game_command, maintenance_args, timeout
+                    )
+                elif is_native(game_type, league_config):
+                    result = await self._run_native(
+                        game_type, league_id, game_folder_path, game_command,
+                        maintenance_args, timeout,
                     )
                 else:
                     result = await self._run_linux_dosemu(
@@ -343,6 +369,74 @@ class GameRunner:
             output=result["output"],
             error=result["error"],
             return_code=result["return_code"]
+        )
+
+    async def _run_native(
+        self,
+        game_type: str,
+        league_id: str,
+        game_folder: Path,
+        game_command: str,
+        args: str,
+        timeout: float
+    ) -> GameRunResult:
+        """Run a native game (Immortal Barons) directly, from its folder.
+
+        Output goes to a log in log_dir, as dosemu's transcript does. The game
+        runs in a session of its own so that a timeout or shutdown kills it
+        and anything it started.
+        """
+        daemon_config = self.config.get("daemon", {})
+        log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"{game_type}_{league_id}_{timestamp}.log"
+
+        argv = [game_command, *shlex.split(args)]
+        if self.verbose:
+            self.log("DEBUG", f"Running: {shlex.join(argv)} in {game_folder}")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(game_folder.resolve()),
+                start_new_session=True,
+            )
+        except OSError as e:
+            return GameRunResult(
+                success=False, game_type="", league_id="", command="",
+                error=f"Could not start {game_command}: {e}", return_code=-1,
+            )
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self._kill_tree(process.pid)
+            await process.wait()
+            raise
+
+        output = stdout.decode(errors="replace") if stdout else ""
+        try:
+            log_file.write_text(output)
+        except OSError as e:
+            self.log("WARNING", f"Could not write {log_file}: {e}")
+        return_code = process.returncode if process.returncode is not None else -1
+
+        error = ""
+        if return_code != 0:
+            # Immortal Barons exits 1 on a new transport fault after doing
+            # its work; its last lines say which. One line, for the journal.
+            lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+            error = " | ".join([f"Exit code: {return_code}", f"log: {log_file}", *lines[-3:]])[:700]
+
+        return GameRunResult(
+            success=return_code == 0,
+            game_type="",
+            league_id="",
+            command="",
+            output=output,
+            error=error,
+            return_code=return_code,
         )
 
     async def _run_linux_dosemu(

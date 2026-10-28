@@ -12,7 +12,7 @@ Async Python client for syncing packets with Nova Hub. Supports one-shot syncs a
 - **One-Shot Sync**: Run once via cron or manual execution
 - **Daemon Mode**: Continuous operation with scheduled sync and maintenance
 - **Cross-Platform Game Execution**: Windows native or Linux via dosemu
-- **Multi-League Support**: Handle multiple BRE and FE leagues simultaneously
+- **Multi-League Support**: Handle multiple BRE, FE and Immortal Barons leagues simultaneously
 - **Configuration Validation**: Verify directories, nodes.dat files, and BBS index consistency
 - **Metrics Tracking**: JSON metrics output for monitoring
 
@@ -198,9 +198,9 @@ does not is only a warning.
 |------|-------------|
 | `client.py` | One-shot sync client with OAuth |
 | `daemon.py` | Continuous operation daemon |
-| `game_runner.py` | Cross-platform BRE/FE execution |
+| `game_runner.py` | Cross-platform BRE/FE execution, and native IB |
 | `validator.py` | Configuration validation |
-| `nodes_parser.py` | BRE/FE nodes.dat file parser |
+| `nodes_parser.py` | BRE/FE nodes.dat (and IB ibnodes.dat) file parser |
 | `_version.py` | Version string, shared with the User-Agent header |
 
 ## Packet Format
@@ -213,6 +213,9 @@ Example: `555B0201.001`
 - Source BBS: `02` (hex)
 - Destination BBS: `01` (hex)
 - Sequence: `001` (000-999, wraps)
+
+Immortal Barons packets are `L<league>-<source>-<sequence>-<dest>.brp`, nodes and sequence in
+base 36 (see the top-level README).
 
 ## Metrics
 
