@@ -8,6 +8,8 @@ What differs from BRE and FE, and why:
   sent archive is pruned by age.
 - The roster, IBNODES.<n> from the hub, is installed as ibnodes.dat in
   game_folder, IB's data directory: IB will not exchange packets without it.
+  Only where there is none, though: IB rewrites the file itself from the
+  Coordinator's signed roster, and the hub's copy must not replace that.
 - IB is a native program: maintenance runs it directly, never under dosemu.
 """
 
@@ -152,11 +154,23 @@ def test_the_roster_is_installed_as_ibnodes_dat(ib):
     assert not list(ib["inbound_dir"].iterdir())
 
 
-def test_a_newer_roster_replaces_the_old(ib):
-    (ib["game_folder"] / "ibnodes.dat").write_bytes(b"old")
-    ib["storage"].queue_nodelist("555I", b"new", "02")
+def test_the_games_own_roster_is_left_alone(ib):
+    (ib["game_folder"] / "ibnodes.dat").write_bytes(b"the game's, signed")
+    ib["storage"].queue_nodelist("555I", b"the hub's", "02")
+    assert sync(ib) == 0
+    assert (ib["game_folder"] / "ibnodes.dat").read_bytes() == b"the game's, signed"
+    assert not list(ib["inbound_dir"].iterdir())
+    # Downloaded all the same, so the hub counts it delivered
+    roster = [p for p in ib["storage"].packets if p["filename"] == "IBNODES.555"]
+    assert roster and all(p["retrieved_at"] for p in roster)
+
+
+def test_a_packet_named_without_nodes_is_warned_about(ib, capsys):
+    stray = ib["outbound_dir"] / "L555-ABCDEFGHIJKLMNOP.brp"
+    stray.write_bytes(b"x")
     sync(ib)
-    assert (ib["game_folder"] / "ibnodes.dat").read_bytes() == b"new"
+    assert stray.exists()
+    assert "no ibnodes.dat yet" in capsys.readouterr().out
 
 
 def test_old_archived_ib_packets_are_pruned(ib):

@@ -364,10 +364,20 @@ class NovaHubClient:
         # Find all packet files
         packet_files = []
         for file in outbound_dir.iterdir():
-            if file.is_file() and self.is_packet_file(
-                file.name, game_type, league_number, league_config
-            ):
+            if not file.is_file():
+                continue
+            if self.is_packet_file(file.name, game_type, league_number, league_config):
                 packet_files.append(file)
+            elif game_type.upper() == "IB" and file.suffix.lower() == ".brp":
+                # The game names a packet without node numbers until it has a
+                # roster, and the hub refuses those; say so, or it sits here.
+                self.log(
+                    "WARNING",
+                    f"Not sending {file.name}: it is not named as a packet from BBS "
+                    f"#{league_config.get('bbs_index')} of league {league_number}. A name "
+                    f"without node numbers means the game has no ibnodes.dat yet.",
+                    league_number,
+                )
 
         if not packet_files:
             self.log("DEBUG", f"No outbound packets in {outbound_dir}", league_number)
@@ -625,7 +635,8 @@ class NovaHubClient:
         BRE and FE take their nodelist in from inbound. Immortal Barons reads
         packets only (*.brp) and its roster from ibnodes.dat in its data
         directory, which is game_folder; it will not exchange packets without
-        one. None if that is where it belongs and game_folder is not set.
+        one, and keeps it current itself once it has one. None if that is
+        where it belongs and game_folder is not set.
         """
         if game_type.upper() == "IB" and NODELIST_NAME.fullmatch(filename):
             game_folder = league_config.get("game_folder")
@@ -672,6 +683,12 @@ class NovaHubClient:
 
         if dest_file is None:
             dest_file = inbound_dir / filename
+        if game_type.upper() == "IB" and NODELIST_NAME.fullmatch(filename) and dest_file.exists():
+            # IB rewrites ibnodes.dat itself from the Coordinator's signed
+            # roster, so the hub's copy only starts a board that has none.
+            # The download still counts: it is what marks the roster delivered.
+            self.log("INFO", f"{filename}: the game keeps its own {dest_file.name}; left it as it is", league_number)
+            return True
         if game_type.upper() in NAMES_NEVER_REPEAT and is_packet_name(filename) and dest_file.exists():
             try:
                 same = dest_file.read_bytes() == body
