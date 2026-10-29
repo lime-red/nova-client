@@ -688,10 +688,12 @@ function Receive-NovaPacket {
         (.br1) where the game would never read it.
 
         -DestinationPath overrides where the file lands: IB's roster goes to
-        ibnodes.dat in GameFolder.
+        ibnodes.dat in GameFolder. -IfMissing lands it only where there is no
+        file yet, since IB rewrites ibnodes.dat itself from the Coordinator's
+        signed roster; it is downloaded either way, which marks it delivered.
     #>
     param([hashtable] $Cfg, $League, [string] $Filename, [string] $DestinationDir,
-        [string] $DestinationPath)
+        [string] $DestinationPath, [switch] $IfMissing)
 
     $safeName = Get-SafeNovaFilename $Filename
     $finalPath = if ($DestinationPath) { $DestinationPath } else { Join-Path $DestinationDir $safeName }
@@ -709,6 +711,12 @@ function Receive-NovaPacket {
         if (Test-Path -LiteralPath $partPath) { Remove-Item -LiteralPath $partPath -Force }
         Write-NovaLog ERROR "Download of $safeName failed ($($result.StatusCode)): $($result.Detail)" $League.Key
         return $false
+    }
+
+    if ($IfMissing -and (Test-Path -LiteralPath $finalPath)) {
+        Remove-Item -LiteralPath $partPath -Force
+        Write-NovaLog INFO "${safeName}: the game keeps its own $(Split-Path -Leaf $finalPath); left it as it is" $League.Key
+        return $true
     }
 
     if ($keepExisting -and (Test-Path -LiteralPath $finalPath)) {
@@ -882,8 +890,13 @@ function Receive-NovaNodelist {
     $pending = Get-ChildItem -LiteralPath $League.InboundDir -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ieq $safeName } | Select-Object -First 1
     if ($pending) { $finalPath = $pending.FullName; $partPath = "$finalPath.part" }
-    # IB takes no nodelist from inbound: it reads ibnodes.dat itself
+    # IB takes no nodelist from inbound: it reads ibnodes.dat itself, and keeps
+    # it current from the Coordinator's signed roster once it has one
     if ($League.Game -eq 'IB') {
+        if ($installed) {
+            Write-NovaLog DEBUG "Have $gameNodes for $($League.LeagueId); the game keeps it current" $League.Key
+            return $false
+        }
         $pending = $null
         $finalPath = Join-Path $League.GameFolder $gameNodes
         $partPath = "$finalPath.part"
@@ -982,7 +995,15 @@ function Invoke-NovaLeagueUpload {
     $uploaded = 0
     $candidates = Get-ChildItem -LiteralPath $League.OutboundDir -File -ErrorAction SilentlyContinue
     foreach ($file in $candidates) {
-        if (-not (Test-NovaPacketFile -Filename $file.Name -League $League)) { continue }
+        if (-not (Test-NovaPacketFile -Filename $file.Name -League $League)) {
+            if ($League.Game -eq 'IB' -and $file.Extension -ieq '.brp') {
+                # The game names a packet without node numbers until it has a
+                # roster, and the hub refuses those; say so, or it sits here.
+                Write-NovaLog WARN ("Not sending {0}: it is not named as a packet from BBS #{1} of league {2}. A name without node numbers means the game has no ibnodes.dat yet." -f
+                    $file.Name, $League.BbsIndex, $League.Number) $League.Key
+            }
+            continue
+        }
 
         if (Send-NovaPacket -Cfg $Cfg -League $League -File $file) {
             # Only once the hub has confirmed receipt do we let go of the file.
@@ -1038,7 +1059,7 @@ function Invoke-NovaLeagueDownload {
             $destination = Join-Path $League.GameFolder $Script:NodesFile['IB']
         }
 
-        if (Receive-NovaPacket -Cfg $Cfg -League $League -Filename $safeName -DestinationDir $League.InboundDir -DestinationPath $destination) {
+        if (Receive-NovaPacket -Cfg $Cfg -League $League -Filename $safeName -DestinationDir $League.InboundDir -DestinationPath $destination -IfMissing:([bool]$destination)) {
             $downloaded++
         }
         else {

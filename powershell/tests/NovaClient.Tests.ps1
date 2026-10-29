@@ -717,6 +717,26 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             Test-Path (Join-Path $Script:Ws.Inbound 'IBNODES.555') | Should -BeFalse -Because 'IB reads only *.brp from inbound'
         }
 
+        It 'leaves the game''s own ibnodes.dat alone' {
+            $roster = Join-Path $Script:Ws.Game 'ibnodes.dat'
+            $kept = "1`r`nKept Hub`r`n-`r`n-`r`n-`r`n-`r`n2`r`nTest BBS`r`n-`r`n-`r`n-`r`n-`r`n"
+            Set-Content -LiteralPath $roster -Value $kept -NoNewline
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.ExitCode | Should -Be 0
+            Get-Content $roster -Raw | Should -Be $kept -Because 'IB keeps it current itself'
+            Test-Path (Join-Path $Script:Ws.Inbound $Script:IbPacket) | Should -BeTrue
+        }
+
+        It 'says why it leaves a packet named without node numbers' {
+            $stray = Join-Path $Script:Ws.Outbound 'L555-ABCDEFGHIJKLMNOP.brp'
+            [IO.File]::WriteAllBytes($stray, [byte[]](1..16))
+
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Once')
+            $r.Output | Should -Match 'no ibnodes\.dat yet'
+            Test-Path $stray | Should -BeTrue
+        }
+
         It 'uploads its own packets, a broadcast too, and leaves other boards'' alone' {
             $ours = Join-Path $Script:Ws.Outbound 'L555-2-0000000000001-0.brp'
             $theirs = Join-Path $Script:Ws.Outbound 'L555-3-0000000000001-0.brp'

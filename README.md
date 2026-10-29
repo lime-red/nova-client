@@ -99,7 +99,8 @@ from the sent archive after `archive_days` (default 30) instead of letting names
 
 Nodelists are `BRNODES.<league>` / `FENODES.<league>` / `IBNODES.<league>`. The hub generates
 them; clients only ever download them. BRE and FE take theirs in from inbound; the clients
-install IB's as `ibnodes.dat` in the game folder, IB's data directory, where IB reads it.
+install IB's as `ibnodes.dat` in the game folder, IB's data directory, where IB reads it --
+but only when there is none, since IB keeps that file current itself.
 
 ## Repository layout
 

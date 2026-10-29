@@ -16,7 +16,11 @@ Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support 
   - Its packets, `L555-2-<seq>-1.brp`, upload and download beside BRE and FE. A broadcast
     (destination 0) is uploaded once; the hub hands it to every board.
   - The hub's roster, `IBNODES.<n>`, is installed as `ibnodes.dat` in the game folder, IB's
-    data directory: IB reads it there and won't exchange packets without one.
+    data directory: IB reads it there and won't exchange packets without one. Only where
+    there is none: IB keeps the file current itself from the Coordinator's signed roster,
+    so an existing one is left alone (from andy5995's lime-red/nova-client#1).
+  - A `.brp` in outbound that is not named as this board's packet gets a warning: IB names
+    one without node numbers until it has a roster (also from andy5995's #1).
   - IB never reuses a packet name, so one already in inbound is never replaced (the same
     bytes count as delivered; different bytes are kept and logged), and IB packets in the
     sent archive are deleted after `sync.archive_days` / `Sync.ArchiveDays` (default 30;
