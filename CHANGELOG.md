@@ -7,8 +7,16 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
-Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support (nova-hub
-#100, after 0.9.0).
+## [0.6.0] — 2026-10-30
+
+Immortal Barons leagues, both clients. Needs nova-hub 0.10.0 or later for an IB league;
+BRE and FE leagues work against any hub they did before.
+
+### Upgrading
+
+Nothing to do for BRE and FE leagues: no dependency, config or unit changes. An IB league
+needs its `[leagues.IB.<n>]` section (see `config.toml.example`) and, usually,
+`run_maintenance_on_download = false` in it. Check the config with `daemon.py --validate`.
 
 ### Added
 
@@ -42,8 +50,7 @@ Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support 
 
 ### Changed
 
-- `openapi/service-api.json` is regenerated from nova-hub main after #100 (0.9.0 plus
-  Immortal Barons), and the mock hub follows it: league ids ending `I`, IB names, a row per
+- `openapi/service-api.json` is regenerated from nova-hub v0.10.0, and the mock hub follows it: league ids ending `I`, IB names, a row per
   board for a broadcast, 409 for a different packet under a used name, and `expires_in`.
 
 ## [0.5.0] — 2026-10-28

@@ -84,7 +84,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$Script:NovaClientVersion = '0.5.0'
+$Script:NovaClientVersion = '0.6.0'
 $Script:UserAgent = "nova-client-ps/$Script:NovaClientVersion (WinPS5.1)"
 $Script:RuntimeLabel = 'PowerShell 5.1'
 
