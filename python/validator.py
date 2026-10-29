@@ -337,6 +337,11 @@ class ClientValidator:
                 self.errors.append(
                     ValidationError("Config", f"{league_key}: game_command {command!r} is not a program this machine can run")
                 )
+        on_download = league_config.get("run_maintenance_on_download")
+        if on_download is not None and not isinstance(on_download, bool):
+            self.errors.append(
+                ValidationError("Config", f"{league_key}: run_maintenance_on_download must be true or false, got {on_download!r}")
+            )
         bbs_index = league_config.get("bbs_index")
         # bool is an int to Python: bbs_index = true would be BBS 1
         if bbs_index is not None and (
