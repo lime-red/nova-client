@@ -932,6 +932,41 @@ Describe 'Nova Client <_.Name>' -ForEach $Targets {
             @($m.unprocessed.BRE_555) | Should -Be @('555B0102.007')
         }
 
+        It 'leaves a league that does not run on download to its schedule' {
+            # Daemon says run on download; the league overrides it
+            (Get-Content $Script:Ws.Config -Raw).Replace(
+                'RunMaintenanceOnDownload   = $false', 'RunMaintenanceOnDownload   = $true').Replace(
+                "GameFolder  = '", "RunMaintenanceOnDownload = `$false`n            GameFolder  = '") |
+                Set-Content $Script:Ws.Config
+            $jobShell = $_.Shell
+            $jobScript = $_.Script
+            $jobConfig = $Script:Ws.Config
+            $job = Start-Job -ScriptBlock {
+                & $using:jobShell -NoProfile -ExecutionPolicy Bypass `
+                    -File $using:jobScript -Config $using:jobConfig -Daemon
+            }
+            try {
+                Start-Sleep -Seconds 8
+                $output = (Receive-Job $job) | Out-String
+            }
+            finally {
+                Stop-Job $job -ErrorAction SilentlyContinue
+                Remove-Job $job -Force -ErrorAction SilentlyContinue
+            }
+            $output | Should -Match 'BRE_555: False'
+            $output | Should -Match 'maintenance waits for its schedule'
+            $output | Should -Not -Match 'running maintenance now'
+        }
+
+        It 'refuses a RunMaintenanceOnDownload that is not $true or $false' {
+            (Get-Content $Script:Ws.Config -Raw).Replace(
+                "GameFolder  = '", "RunMaintenanceOnDownload = 'no'`n            GameFolder  = '") |
+                Set-Content $Script:Ws.Config
+            $r = Invoke-Client -Target $_ -ConfigPath $Script:Ws.Config -ClientArgs @('-Validate')
+            $r.ExitCode | Should -Be 2
+            $r.Output | Should -Match 'RunMaintenanceOnDownload must be'
+        }
+
         It 'exits 2 when the config file does not exist' {
             $r = Invoke-Client -Target $_ -ConfigPath (Join-Path $Script:Ws.Root 'nope.psd1') -ClientArgs @('-Once')
             $r.ExitCode | Should -Be 2

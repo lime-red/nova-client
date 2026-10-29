@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 
 # cmd.exe (Windows) and COMMAND.COM (the batch file under dosemu) give these
@@ -721,10 +721,12 @@ $_quiet = (1)
 
     async def run_all_maintenance(
         self,
-        timeout_per_league: float = 300.0
+        timeout_per_league: float = 300.0,
+        select: Optional[Callable[[dict], bool]] = None,
     ) -> Dict[str, GameRunResult]:
         """
-        Run maintenance for all enabled leagues.
+        Run maintenance for all enabled leagues, or those of them select
+        accepts (given each league's config).
 
         Returns:
             Dict mapping league keys (e.g., "BRE_555") to their results
@@ -735,6 +737,8 @@ $_quiet = (1)
         for game_type, game_leagues in leagues.items():
             for league_id, league_config in game_leagues.items():
                 if not league_config.get("enabled", True):
+                    continue
+                if select is not None and not select(league_config):
                     continue
 
                 # Skip if no game_folder configured

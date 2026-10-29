@@ -275,7 +275,7 @@ async def test_replies_written_by_maintenance_go_out_at_once(hub, tmp_path, monk
     daemon = daemon_module.NovaDaemon(config)
     reply = tmp_path / "outbound" / "555B0201.002"
 
-    async def maintenance(timeout_per_league):
+    async def maintenance(timeout_per_league, select=None):
         reply.write_bytes(b"reply")
         return {}
 
@@ -286,10 +286,94 @@ async def test_replies_written_by_maintenance_go_out_at_once(hub, tmp_path, monk
     assert hub.tokens_issued == 1
 
 
+def _with_ib(config, tmp_path, daemon="", league=""):
+    """Add an IB league beside the BRE one, with its own settings"""
+    (tmp_path / "ib").mkdir()
+    path = Path(config)
+    path.write_text(path.read_text() + f"""
+[leagues.IB.016]
+bbs_index = 2
+runner = "native"
+game_folder = "{tmp_path / 'ib'}"
+inbound_dir = "{tmp_path / 'ib'}"
+outbound_dir = "{tmp_path / 'ib'}"
+{league}
+
+[daemon]
+{daemon}
+""")
+    return config
+
+
+def _recording_runs(daemon, monkeypatch):
+    ran = []
+
+    async def run_maintenance(game_type, league_id, league_config, timeout):
+        ran.append(f"{game_type}_{league_id}")
+        return GameRunResult(success=True, game_type=game_type, league_id=league_id, command="x")
+
+    monkeypatch.setattr(daemon.game_runner, "run_maintenance", run_maintenance)
+    return ran
+
+
+@pytest.mark.asyncio
+async def test_a_league_can_wait_for_the_schedule_when_packets_arrive(hub, tmp_path, monkeypatch):
+    config = _with_ib(_config(tmp_path, hub.url), tmp_path,
+                      league="run_maintenance_on_download = false")
+    (tmp_path / "bre").mkdir()
+    Path(config).write_text(Path(config).read_text().replace(
+        "[leagues.BRE.555]\n", f"[leagues.BRE.555]\ngame_folder = \"{tmp_path / 'bre'}\"\n"))
+    daemon = daemon_module.NovaDaemon(config)
+    ran = _recording_runs(daemon, monkeypatch)
+
+    await daemon._run_sync()
+    assert ran == ["BRE_555"]
+    # IB was left out, so its schedule is not reset by this run
+    assert daemon._last_maintenance is None
+
+    await daemon._run_scheduled_maintenance()
+    assert ran == ["BRE_555", "BRE_555", "IB_016"]
+
+
+@pytest.mark.asyncio
+async def test_a_league_can_run_when_packets_arrive_though_the_daemon_does_not(
+        hub, tmp_path, monkeypatch, capsys):
+    config = _with_ib(_config(tmp_path, hub.url), tmp_path,
+                      daemon="run_maintenance_on_download = false",
+                      league="run_maintenance_on_download = true")
+    daemon = daemon_module.NovaDaemon(config)
+    ran = _recording_runs(daemon, monkeypatch)
+
+    await daemon._run_sync()
+    # BRE_555 has no game_folder here, so IB is all that can run
+    assert ran == ["IB_016"]
+    assert daemon._last_maintenance is not None
+
+
+@pytest.mark.asyncio
+async def test_no_maintenance_on_download_when_every_league_waits(hub, tmp_path, monkeypatch, capsys):
+    config = _with_ib(_config(tmp_path, hub.url), tmp_path,
+                      daemon="run_maintenance_on_download = false")
+    daemon = daemon_module.NovaDaemon(config)
+    ran = _recording_runs(daemon, monkeypatch)
+
+    await daemon._run_sync()
+    assert ran == []
+    assert "maintenance waits for its schedule" in capsys.readouterr().out
+    assert daemon.stats["packets_downloaded"] > 0
+
+
+def test_run_maintenance_on_download_must_be_true_or_false(tmp_path):
+    config = _with_ib(_config(tmp_path, "http://hub"), tmp_path,
+                      league='run_maintenance_on_download = "no"')
+    with pytest.raises(ValueError, match="leagues.IB.016.run_maintenance_on_download"):
+        daemon_module.NovaDaemon(config)
+
+
 # -- what maintenance leaves in inbound (#15) -----------------------------------------
 
 def _maintenance_that(takes_in, inbound):
-    async def maintenance(timeout_per_league):
+    async def maintenance(timeout_per_league, select=None):
         if takes_in:
             for p in inbound.iterdir():
                 if p.name.upper() == PACKET:

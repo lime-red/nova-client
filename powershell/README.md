@@ -139,6 +139,9 @@ To remove it: `Unregister-ScheduledTask -TaskName NovaClient -Confirm:$false`
 
 In `-Daemon` mode the client runs e.g. `BRE PLANETARY` in the game folder, either on
 `MaintenanceIntervalSeconds` or immediately when packets arrive (`RunMaintenanceOnDownload`).
+`Daemon.RunMaintenanceOnDownload` applies to every league unless the league sets its own
+`RunMaintenanceOnDownload`. Immortal Barons sends packets on every run, so its leagues are
+best left to the schedule (`RunMaintenanceOnDownload = $false` in the league).
 
 The game is launched through `cmd.exe` **with its own console window**, and its output is not
 redirected. That looks wasteful and it is deliberate: BRE and FE are DOS-era console programs

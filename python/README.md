@@ -104,7 +104,7 @@ enabled = true
 sync_interval = 120               # Seconds between hub syncs
 maintenance_interval = 600        # Seconds between scheduled maintenance
 maintenance_timeout = 300         # Max seconds for game execution
-run_maintenance_on_download = true
+run_maintenance_on_download = true # unless a league sets its own (below)
 
 # Linux dosemu settings
 dosemu_path = "/usr/bin/dosemu"
@@ -119,6 +119,15 @@ lredir maps to the BBS tree) rather than from `drive_c`, list it in
 `dosemu_drives`. BRE and FE store the drive paths they were set up with in
 their own config files, so maintenance has to see the same drive; set
 `game_dos_path` on that drive too.
+
+`run_maintenance_on_download` applies to every league unless the league sets
+its own in `[leagues.<game>.<id>]`. Immortal Barons sends packets on every run,
+so its leagues are best left to the schedule:
+
+```toml
+[leagues.IB.016]
+run_maintenance_on_download = false
+```
 
 ## Usage
 
@@ -149,8 +158,8 @@ python daemon.py --config config.toml --verbose
 The daemon:
 1. Syncs with Nova Hub at `sync_interval`, keeping one token until it expires
 2. Runs game maintenance at `maintenance_interval`
-3. Triggers immediate maintenance when packets are downloaded (if enabled), then
-   uploads the replies it wrote
+3. Triggers immediate maintenance when packets are downloaded (for the leagues
+   with `run_maintenance_on_download` on), then uploads the replies it wrote
 4. With `enabled = false` it starts, syncs nothing, and waits to be stopped
 
 The daemon and `client.py` take a lock beside the config (`config.toml.lock`), so only one

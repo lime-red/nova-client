@@ -17,6 +17,10 @@ Configuration (config.toml):
     enabled = true
     sync_interval = 120        # seconds between hub syncs
     maintenance_interval = 600 # seconds between scheduled maintenance runs
+    run_maintenance_on_download = true
+
+    [leagues.IB.016]
+    run_maintenance_on_download = false  # overrides [daemon] for this league
 """
 
 import argparse
@@ -114,7 +118,24 @@ class NovaDaemon:
         # Drive letter -> host directory, mapped with lredir for maintenance
         daemon.setdefault("dosemu_drives", {})
 
+        for key, value in [("daemon", daemon.get("run_maintenance_on_download"))] + [
+            (f"leagues.{game_type}.{league_id}", league_config.get("run_maintenance_on_download"))
+            for game_type, leagues in config.get("leagues", {}).items()
+            for league_id, league_config in leagues.items()
+        ]:
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{key}.run_maintenance_on_download must be true or false, got {value!r}")
+
         return config
+
+    def _on_download(self, league_config: dict) -> bool:
+        """Whether packets arriving run this league's maintenance at once: the
+        league's own run_maintenance_on_download, else [daemon]'s. Immortal
+        Barons sends packets on every run, so a league of it that answers each
+        download keeps a packet going round with the hub every sync."""
+        return league_config.get(
+            "run_maintenance_on_download", self.config["daemon"]["run_maintenance_on_download"]
+        )
 
     def log(self, level: str, message: str):
         """Simple logging with timestamp"""
@@ -274,11 +295,25 @@ class NovaDaemon:
                 f"Sync complete: uploaded={uploaded}, downloaded={downloaded}, errors={errors}"
             )
 
-            # Trigger immediate maintenance if packets were downloaded
-            if downloaded > 0 and self.config["daemon"].get("run_maintenance_on_download", True):
-                self.log("INFO", "Packets downloaded - triggering immediate maintenance")
-                await self._run_triggered_maintenance()
-                await self._upload_replies()
+            # Trigger immediate maintenance if packets were downloaded, for the
+            # leagues that want it
+            if downloaded > 0:
+                leagues = [
+                    league_config
+                    for game_leagues in self.config.get("leagues", {}).values()
+                    for league_config in game_leagues.values()
+                    if league_config.get("enabled", True)
+                ]
+                if any(self._on_download(c) for c in leagues):
+                    self.log("INFO", "Packets downloaded - triggering immediate maintenance")
+                    # A league with no game_folder never runs maintenance, so
+                    # it is not one left waiting
+                    await self._run_triggered_maintenance(everyone=all(
+                        self._on_download(c) for c in leagues if c.get("game_folder")
+                    ))
+                    await self._upload_replies()
+                else:
+                    self.log("INFO", "Packets downloaded - maintenance waits for its schedule")
 
         except Exception as e:
             self.log("ERROR", f"Sync failed: {e}")
@@ -314,20 +349,24 @@ class NovaDaemon:
         finally:
             self._lock.release()
 
-    async def _run_triggered_maintenance(self):
-        """Run maintenance triggered by packet download"""
+    async def _run_triggered_maintenance(self, everyone: bool = True):
+        """Run maintenance triggered by packet download, for the leagues whose
+        run_maintenance_on_download is on (everyone: that is all of them)"""
         self.log("INFO", "Starting triggered maintenance (packets arrived)")
-        await self._run_maintenance("packet-triggered")
-        # Also update last_maintenance to reset the schedule
-        self._last_maintenance = datetime.now()
+        await self._run_maintenance("packet-triggered", select=self._on_download)
+        # Also update last_maintenance to reset the schedule, but only if every
+        # league ran: one left out would otherwise wait as long as packets keep
+        # arriving
+        if everyone:
+            self._last_maintenance = datetime.now()
 
-    async def _run_maintenance(self, reason: str):
-        """Run maintenance for all enabled leagues"""
+    async def _run_maintenance(self, reason: str, select=None):
+        """Run maintenance for all enabled leagues, or those select accepts"""
         timeout = self.config["daemon"].get("maintenance_timeout", 300)
 
         try:
             results = await self.game_runner.run_all_maintenance(
-                timeout_per_league=timeout
+                timeout_per_league=timeout, select=select
             )
 
             success_count = sum(1 for r in results.values() if r.success)
@@ -365,8 +404,9 @@ class NovaDaemon:
     def _check_inbound(self, results: Dict[str, GameRunResult]):
         """Warn about, and record for metrics.json, any packet maintenance left
         in inbound. Only leagues that ran are judged; nothing downloads while
-        maintenance holds the lock, so everything there was there before it."""
-        unprocessed: Dict[str, List[str]] = {}
+        maintenance holds the lock, so everything there was there before it.
+        A league that did not run keeps what its last run left."""
+        unprocessed: Dict[str, List[str]] = dict(self._unprocessed or {})
         for game_type, leagues in self.config.get("leagues", {}).items():
             for league_id, league_config in leagues.items():
                 league_key = f"{game_type}_{league_id}"
@@ -456,6 +496,11 @@ def main():
             print(f"  sync_interval: {daemon.get('sync_interval', 120)}s")
             print(f"  maintenance_interval: {daemon.get('maintenance_interval', 600)}s")
             print(f"  run_maintenance_on_download: {daemon.get('run_maintenance_on_download', True)}")
+            for game_type, leagues in config.get("leagues", {}).items():
+                for league_id, league_config in leagues.items():
+                    if "run_maintenance_on_download" in league_config:
+                        print(f"    {game_type}.{league_id}: "
+                              f"{league_config['run_maintenance_on_download']}")
 
             # Also run client validation
             from validator import ClientValidator
