@@ -296,6 +296,8 @@ function Get-NovaLeagues {
             GameFolder      = $gameFolder
             GameCommand     = Get-NovaSetting $league 'GameCommand' $game.ToUpperInvariant()
             MaintenanceArgs = Get-NovaSetting $league 'MaintenanceArgs' $defaultArgs
+            # $null: Daemon.RunMaintenanceOnDownload applies
+            RunMaintenanceOnDownload = Get-NovaSetting $league 'RunMaintenanceOnDownload'
         }
     }
     return $result
@@ -1320,23 +1322,44 @@ function Get-NovaUnprocessedPacket {
             ForEach-Object { $_.Name } | Sort-Object)
 }
 
+function Test-NovaMaintenanceOnDownload {
+    <#
+        Whether packets arriving run this league's maintenance at once: the
+        league's own RunMaintenanceOnDownload, else Daemon's. Immortal Barons
+        sends packets on every run, so a league of it that answers each
+        download keeps a packet going round with the hub every sync.
+    #>
+    param([hashtable] $Cfg, $League)
+
+    if ($null -ne $League.RunMaintenanceOnDownload) { return [bool]$League.RunMaintenanceOnDownload }
+    return [bool](Get-NovaSetting $Cfg 'Daemon.RunMaintenanceOnDownload' $true)
+}
+
 function Invoke-NovaAllMaintenance {
     <#
         Returns Ran and Failed counts. Failures used to go uncounted, so a
         daemon whose game never ran still reported no errors.
 
+        -OnDownload runs only the leagues that want maintenance when packets
+        arrive (Test-NovaMaintenanceOnDownload).
+
         Afterwards, warns about anything left in each league's inbound. Only
         leagues that ran are judged, and nothing downloads during maintenance,
-        so everything there was there before it.
+        so everything there was there before it. A league that did not run
+        keeps what its last run left.
     #>
-    param([hashtable] $Cfg)
+    param([hashtable] $Cfg, [switch] $OnDownload)
 
     $timeout = [int](Get-NovaSetting $Cfg 'Daemon.MaintenanceTimeoutSeconds' 300)
     $ran = 0
     $failed = 0
     $unprocessed = [ordered]@{}
+    if ($Script:Unprocessed) {
+        foreach ($key in $Script:Unprocessed.Keys) { $unprocessed[$key] = $Script:Unprocessed[$key] }
+    }
     foreach ($league in (Get-NovaLeagues -Cfg $Cfg)) {
         if (-not $league.GameFolder) { continue }
+        if ($OnDownload -and -not (Test-NovaMaintenanceOnDownload -Cfg $Cfg -League $league)) { continue }
         if (Invoke-NovaGameMaintenance -League $league -TimeoutSeconds $timeout) { $ran++ }
         else { $failed++ }
 
@@ -1378,6 +1401,11 @@ function Test-NovaConfig {
         $null = $problems.Add("Sync.ArchiveDays must be a whole number of days (0 keeps all), got '$archiveDays'")
     }
 
+    $onDownload = Get-NovaSetting $Cfg 'Daemon.RunMaintenanceOnDownload' $true
+    if ($onDownload -isnot [bool]) {
+        $null = $problems.Add("Daemon.RunMaintenanceOnDownload must be `$true or `$false (got $onDownload)")
+    }
+
     $leagues = @(Get-NovaLeagues -Cfg $Cfg)
     if ($leagues.Count -eq 0) { $null = $warnings.Add('No enabled leagues configured') }
 
@@ -1406,6 +1434,9 @@ function Test-NovaConfig {
             if ([string]$setting.Value -match $Script:UnsafeCommandPattern) {
                 $null = $problems.Add("${label}: $($setting.Name) holds a character cmd.exe would act on (& | < > ^ % `" or a line break): $($setting.Value)")
             }
+        }
+        if ($null -ne $league.RunMaintenanceOnDownload -and $league.RunMaintenanceOnDownload -isnot [bool]) {
+            $null = $problems.Add("${label}: RunMaintenanceOnDownload must be `$true or `$false (got $($league.RunMaintenanceOnDownload))")
         }
         if ($league.BbsIndex -isnot [int]) {
             $null = $problems.Add("${label}: BbsIndex is required and must be a number")
@@ -1753,11 +1784,22 @@ function Start-NovaDaemon {
     $syncInterval = [int](Get-NovaSetting $Cfg 'Daemon.SyncIntervalSeconds' 120)
     $maintInterval = [int](Get-NovaSetting $Cfg 'Daemon.MaintenanceIntervalSeconds' 600)
     $maintOnDownload = [bool](Get-NovaSetting $Cfg 'Daemon.RunMaintenanceOnDownload' $true)
+    $leagues = @(Get-NovaLeagues -Cfg $Cfg)
+    # Whether any league runs when packets arrive, and whether every league
+    # that runs maintenance at all does
+    $anyOnDownload = @($leagues | Where-Object { Test-NovaMaintenanceOnDownload -Cfg $Cfg -League $_ }).Count -gt 0
+    $allOnDownload = @($leagues | Where-Object {
+            $_.GameFolder -and -not (Test-NovaMaintenanceOnDownload -Cfg $Cfg -League $_) }).Count -eq 0
 
     # The version and hub are already on the startup banner in Invoke-NovaMain.
     Write-NovaLog INFO 'Daemon mode'
     Write-NovaLog INFO "Sync every ${syncInterval}s, maintenance every ${maintInterval}s"
     Write-NovaLog INFO "Run maintenance on download: $maintOnDownload"
+    foreach ($league in $leagues) {
+        if ($null -ne $league.RunMaintenanceOnDownload) {
+            Write-NovaLog INFO "  $($league.Key): $([bool]$league.RunMaintenanceOnDownload)"
+        }
+    }
     Write-NovaLog INFO 'Press Ctrl+C to stop'
 
     Register-NovaShutdownHandler
@@ -1786,14 +1828,19 @@ function Start-NovaDaemon {
                 $stats.packets_downloaded += $result.Downloaded
                 $stats.errors += $result.Errors
 
-                if ($result.Downloaded -gt 0 -and $maintOnDownload) {
+                if ($result.Downloaded -gt 0 -and -not $anyOnDownload) {
+                    Write-NovaLog INFO "$($result.Downloaded) packet(s) arrived; maintenance waits for its schedule"
+                }
+                elseif ($result.Downloaded -gt 0) {
                     Write-NovaLog INFO "$($result.Downloaded) packet(s) arrived; running maintenance now"
-                    $maint = Invoke-NovaAllMaintenance -Cfg $Cfg
+                    $maint = Invoke-NovaAllMaintenance -Cfg $Cfg -OnDownload
                     $stats.maintenance_count += $maint.Ran
                     $stats.errors += $maint.Failed
                     # Reset the scheduled clock too, so we don't immediately run
-                    # a second time for the same batch of packets.
-                    $lastMaintenance = Get-Date
+                    # a second time for the same batch of packets - but only if
+                    # every league ran: one left out would otherwise wait as
+                    # long as packets keep arriving.
+                    if ($allOnDownload) { $lastMaintenance = Get-Date }
 
                     # Send the replies maintenance just wrote now, rather than
                     # a sync interval from now.

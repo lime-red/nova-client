@@ -34,8 +34,8 @@ Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support 
     fails the run with IB's last lines; the Linux log is in `log_dir`.
   - Validation knows IB: `ibnodes.dat` with its optional key line, no HOST-line warning,
     and a `game_command` that has to exist.
-  - `run_maintenance_on_download` can be set per league, overriding `[daemon]`'s (Python
-    daemon). IB sends packets on every run and the hub answers each upload, so an IB
+  - `run_maintenance_on_download` / `RunMaintenanceOnDownload` can be set per league,
+    overriding `[daemon]`'s / `Daemon`'s. IB sends packets on every run and the hub answers each upload, so an IB
     league that runs on every download keeps a packet going round with the hub every
     sync; set it to `false` there and its packets wait for the scheduled run. Leagues
     left out of a download's run keep their schedule, which such a run no longer resets.

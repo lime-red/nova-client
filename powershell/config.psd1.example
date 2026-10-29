@@ -84,6 +84,8 @@
 
         # Run maintenance immediately when packets arrive, instead of waiting
         # for the next scheduled run. This is what keeps turnaround quick.
+        # It applies to every league unless the league sets its own
+        # RunMaintenanceOnDownload (see the Immortal Barons example below).
         RunMaintenanceOnDownload = $true
     }
 
@@ -140,6 +142,12 @@
         #     GameFolder      = 'C:\immortal-barons\ib_016'
         #     GameCommand     = 'C:\immortal-barons\immortal-barons.exe'
         #     MaintenanceArgs = '-maint -data C:\immortal-barons\ib_016'
+        #     # Overrides Daemon.RunMaintenanceOnDownload for this league. IB
+        #     # sends packets on every run, and the hub answers each upload, so
+        #     # a league that runs on every download keeps packets going round
+        #     # once a sync. Off, the packets wait in InboundDir for the next
+        #     # scheduled run, which applies them.
+        #     RunMaintenanceOnDownload = $false
         # }
     )
 }
