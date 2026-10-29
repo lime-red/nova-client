@@ -173,6 +173,20 @@ class ClientValidator:
             # Already reported by validate_directory
             return
 
+        if game_type.upper() == "IB" and not any(
+            self.find_file_case_insensitive(game_folder_path, name)
+            for name in ("coord.pub", "coord.key")
+        ):
+            self.warnings.append(
+                ValidationError(
+                    "NodesFile",
+                    f"{league_key}: no coord.pub in {game_folder}, so the game refuses the "
+                    "league's rules and roster (the client records the Coordinator's key "
+                    "from the hub on its next sync)",
+                    severity="WARNING"
+                )
+            )
+
         # Determine expected nodes file name
         nodes_filename = NODES_FILES.get(game_type.upper(), "brnodes.dat")
 

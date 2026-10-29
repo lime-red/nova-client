@@ -21,6 +21,10 @@ Immortal Barons leagues, both clients. Needs a hub with Immortal Barons support 
     so an existing one is left alone (from andy5995's lime-red/nova-client#1).
   - A `.brp` in outbound that is not named as this board's packet gets a warning: IB names
     one without node numbers until it has a roster (also from andy5995's #1).
+  - The League Coordinator's public key, which IB needs before it accepts the league's
+    signed rules and roster, is fetched from the hub (`GET .../coordinator-key`) and
+    recorded as `coord.pub` in the game folder, as `immortal-barons -coord-key` would. Only
+    where there is none: an existing key is never replaced. Validation warns until it is there.
   - IB never reuses a packet name, so one already in inbound is never replaced (the same
     bytes count as delivered; different bytes are kept and logged), and IB packets in the
     sent archive are deleted after `sync.archive_days` / `Sync.ArchiveDays` (default 30;

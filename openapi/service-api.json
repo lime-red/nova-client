@@ -133,6 +133,25 @@
         "title": "ClientVerifyResponse",
         "type": "object"
       },
+      "CoordinatorKeyResponse": {
+        "description": "An Immortal Barons league's Coordinator public key (Service API)",
+        "properties": {
+          "league_id": {
+            "title": "League Id",
+            "type": "string"
+          },
+          "public_key": {
+            "title": "Public Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "league_id",
+          "public_key"
+        ],
+        "title": "CoordinatorKeyResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -403,6 +422,55 @@
         "summary": "Verify Access Token",
         "tags": [
           "Service API - Authentication"
+        ]
+      }
+    },
+    "/api/v1/leagues/{league_id}/coordinator-key": {
+      "get": {
+        "description": "The League Coordinator's public key, for an Immortal Barons league\n\n**Path Parameters:**\n- `league_id`: League identifier with game type, e.g. \"555I\"\n\n**Returns:** `public_key`, the 64 hex characters a board records with\n`immortal-barons -coord-key <key> -data <its data directory>`.\n\n**Description:**\nThe hub is node 1, the League Coordinator: its game signs the league's\nrules and roster, and a board refuses them until it holds this key. The\ngame will not take the key from a packet, since a key that arrived in one\nwould prove nothing, so it comes from here instead, over the client's own\nauthenticated connection. It is a public key; it lets a board check the\nCoordinator's orders, not issue them.\n\nFetch it once, when the board joins. It changes only if the league changes\nCoordinator.\n\n**Authentication:** Requires Bearer token and league membership\n\n**Errors:** 404 if the league is not an Immortal Barons league, or the\nhub has no Coordinator key for it yet.",
+        "operationId": "coordinator_key_api_v1_leagues__league_id__coordinator_key_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "league_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(\\d{3})([BFIbfi])$",
+              "title": "League Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "summary": "Get Coordinator Key",
+        "tags": [
+          "Service API - Leagues"
         ]
       }
     },

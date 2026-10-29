@@ -127,7 +127,8 @@
         # }
 
         # Immortal Barons. GameFolder is its data directory (-data), where the
-        # client installs the hub's roster as ibnodes.dat if there is none;
+        # client installs the hub's roster as ibnodes.dat and records the
+        # Coordinator's key as coord.pub, each only if there is none yet;
         # InboundDir and OutboundDir are bbs.cfg's GameInbound and GameOutbound.
         # @{
         #     Game    = 'IB'

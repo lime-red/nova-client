@@ -30,6 +30,7 @@ PAYLOAD = bytes(range(256)) * 4
 
 IB_PACKET = "L555-3-0000000000005-2.BRP"
 IB_PAYLOAD = b'{"FromNode": 3, "ToNode": 2, "Seq": 5}'
+IB_COORD_KEY = "c0" * 32
 IB_ROSTER = (b"1\r\nNova Hub\r\n1:1/1\r\nBrisbane\r\nQLD\r\nAUS\r\n" + b"ab" * 32 + b"\r\n\r\n"
              b"2\r\nTest BBS\r\n1:2/3\r\nSomewhere\r\nSomestate\r\nSomewhere\r\n" + b"cd" * 32 + b"\r\n")
 
@@ -100,6 +101,7 @@ def seed() -> None:
     })
     storage.next_packet_id += 1
     storage.queue_nodelist("555I", IB_ROSTER, "02")
+    storage.coordinator_keys["555I"] = IB_COORD_KEY
 
 
 @app.post("/__test__/reset")

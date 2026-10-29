@@ -984,6 +984,63 @@ function Receive-NovaNodelist {
 #  Sync
 # ============================================================================
 
+function Receive-NovaCoordinatorKey {
+    <#
+        Records the League Coordinator's public key for an Immortal Barons
+        board that has none. The board refuses the league's signed rules and
+        roster until it holds the key, and the game will not take it from a
+        packet. The hub, which is the Coordinator, serves it over this
+        client's own authenticated connection; it is written as coord.pub in
+        GameFolder, exactly as 'immortal-barons -coord-key' writes it.
+
+        An existing coord.pub is never replaced: the key changes only when the
+        league changes Coordinator, and that is a sysop's decision. A board
+        holding coord.key is the Coordinator and needs nothing.
+
+        Returns $true if the board has a key afterwards.
+    #>
+    param([hashtable] $Cfg, $League)
+
+    if (-not $League.GameFolder) { return $false }
+    foreach ($name in 'coord.pub', 'coord.key') {
+        if (Test-Path -LiteralPath (Join-Path $League.GameFolder $name)) { return $true }
+    }
+
+    $url = '{0}/service/api/v1/leagues/{1}/coordinator-key' -f
+        (Get-NovaSetting $Cfg 'Hub.Url').TrimEnd('/'), $League.LeagueId
+    $result = Invoke-NovaApi -Cfg $Cfg -Method 'GET' -Uri $url
+    if (-not $result.Ok) {
+        if ($result.StatusCode -eq 404) {
+            Write-NovaLog WARN "The hub has no Coordinator key for $($League.LeagueId) yet, so the game will refuse the league's rules and roster; asking again next sync" $League.Key
+        }
+        else {
+            Write-NovaLog ERROR "Coordinator key: request failed ($($result.StatusCode)): $($result.Detail)" $League.Key
+        }
+        return $false
+    }
+
+    $data = ConvertFrom-NovaJson $result.Content
+    $key = if ($data -and $data.public_key) { ([string]$data.public_key).Trim().ToLowerInvariant() } else { '' }
+    if ($key -cnotmatch '^[0-9a-f]{64}$') {
+        Write-NovaLog ERROR "Coordinator key: the hub sent something that is not a key" $League.Key
+        return $false
+    }
+
+    $dest = Join-Path $League.GameFolder 'coord.pub'
+    $part = "$dest.part"
+    try {
+        [IO.File]::WriteAllText($part, "$key`n", [Text.Encoding]::ASCII)
+        Move-Item -LiteralPath $part -Destination $dest -Force
+    }
+    catch {
+        Write-NovaLog ERROR "Could not write ${dest}: $($_.Exception.Message)" $League.Key
+        if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
+        return $false
+    }
+    Write-NovaLog INFO "Recorded the League Coordinator's key in $dest" $League.Key
+    return $true
+}
+
 function Invoke-NovaLeagueUpload {
     param([hashtable] $Cfg, $League)
 
@@ -1113,6 +1170,10 @@ function Invoke-NovaSync {
         }
 
         Write-NovaLog INFO "--- $($league.Game) league $($league.Number) (BBS #$($league.BbsIndex)) ---"
+
+        if ($league.Game -eq 'IB' -and -not $UploadOnly) {
+            $null = Receive-NovaCoordinatorKey -Cfg $Cfg -League $league
+        }
 
         # Upload first, always. Flushing our own outbound traffic before pulling
         # new inbound work means a slow download never delays our own replies.
@@ -1394,6 +1455,10 @@ function Test-NovaConfig {
         }
 
         if ($league.GameFolder -and (Test-Path -LiteralPath $league.GameFolder)) {
+            if ($league.Game -eq 'IB' -and -not (Get-ChildItem -LiteralPath $league.GameFolder -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -ieq 'coord.pub' -or $_.Name -ieq 'coord.key' })) {
+                $null = $warnings.Add("${label}: no coord.pub in $($league.GameFolder), so the game refuses the league's rules and roster (the client records the Coordinator's key from the hub on its next sync)")
+            }
             Test-NovaNodesFile -League $league -BbsName $bbsName -Problems $problems -Warnings $warnings
         }
         else {
