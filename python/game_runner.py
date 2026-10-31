@@ -11,13 +11,17 @@ queuing.
 import asyncio
 import os
 import platform
+import re
 import shlex
 import signal
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional
+
+from client import GAME_LETTERS
 
 
 # cmd.exe (Windows) and COMMAND.COM (the batch file under dosemu) give these
@@ -47,6 +51,21 @@ def check_command(league_config: dict, game_type: str) -> str:
 
 # Games that are native programs, not DOS doors: never run under dosemu.
 NATIVE_GAMES = {"IB"}
+
+# Every game run writes a log of its own, BRE_015_20261031_075417.log, so
+# log_dir grows by one file per league per run. daemon.log_days, default 30;
+# 0 keeps them all.
+DEFAULT_LOG_DAYS = 30
+# How many failed names a prune warning lists before "and N more".
+PRUNE_FAILURES_NAMED = 2
+
+
+# The names this client gives a run's log, {game_type}_{league_id}_{stamp}.log
+# as the runs below write them, for any game it plays and any league number:
+# so a league dropped from the config still ages out, and nothing a sysop is
+# likely to name a file can match. The game is as the config spells it.
+RUN_LOG_NAME = re.compile(
+    rf"(?:{'|'.join(GAME_LETTERS)})_\d{{1,3}}_\d{{8}}_\d{{6}}\.log", re.IGNORECASE)
 
 
 def is_native(game_type: str, league_config: dict) -> bool:
@@ -125,6 +144,46 @@ class GameRunner:
         """Simple logging"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"[{timestamp}] [{level}] [GameRunner] {message}")
+
+    def prune_logs(self) -> int:
+        """Delete the game runs' logs in log_dir older than daemon.log_days.
+        Returns how many went.
+
+        Only a name this client gives a run's log is touched (RUN_LOG_NAME);
+        anything else in log_dir is left alone."""
+        daemon_config = self.config.get("daemon", {})
+        days = daemon_config.get("log_days", DEFAULT_LOG_DAYS)
+        if not days:
+            return 0
+        log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
+        cutoff = time.time() - days * 86400
+        removed = 0
+        failed = []
+        try:
+            entries = list(log_dir.iterdir())
+        except OSError:
+            return 0
+        for entry in entries:
+            if not RUN_LOG_NAME.fullmatch(entry.name):
+                continue
+            try:
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+                    removed += 1
+            except OSError as e:
+                failed.append((entry.name, e))
+        if failed:
+            # One line, not one per file: a log_dir the daemon can't write to
+            # would fail on every old log at once.
+            shown = ", ".join(name for name, _ in failed[:PRUNE_FAILURES_NAMED])
+            more = len(failed) - PRUNE_FAILURES_NAMED
+            if more > 0:
+                shown += f", and {more} more"
+            self.log("WARNING", f"Could not prune {len(failed)} game log(s) in {log_dir}: "
+                                f"{shown} ({failed[0][1].strerror or failed[0][1]})")
+        if removed:
+            self.log("INFO", f"Pruned {removed} game log(s) older than {days} days")
+        return removed
 
     async def run_maintenance(
         self,

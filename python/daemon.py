@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import signal
 import sys
+import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,7 +38,9 @@ import toml
 from _version import __version__
 from client import NovaHubClient, unprocessed_packets
 from instance_lock import InstanceLock
-from game_runner import GameRunner, GameRunResult
+from game_runner import DEFAULT_LOG_DAYS, GameRunner, GameRunResult
+
+LOG_PRUNE_EVERY = 3600  # seconds
 
 
 class NovaDaemon:
@@ -64,6 +67,7 @@ class NovaDaemon:
         # Timing state
         self._last_sync: Optional[datetime] = None
         self._last_maintenance: Optional[datetime] = None
+        self._last_log_prune: Optional[float] = None
 
         # One token for every sync until it expires or the hub refuses it,
         # rather than a fresh one each cycle (#20)
@@ -115,6 +119,9 @@ class NovaDaemon:
         # supplies when the daemon runs as a service. See game_runner.py.
         daemon.setdefault("dosemu_term", "linux")
         daemon.setdefault("log_dir", "./logs")
+        log_days = daemon.setdefault("log_days", DEFAULT_LOG_DAYS)
+        if isinstance(log_days, bool) or not isinstance(log_days, int) or log_days < 0:
+            raise ValueError(f"daemon.log_days must be a whole number of days (0 keeps all), got {log_days!r}")
         # Drive letter -> host directory, mapped with lredir for maintenance
         daemon.setdefault("dosemu_drives", {})
 
@@ -394,12 +401,25 @@ class NovaDaemon:
                     self.stats["errors"] += 1
 
             self._check_inbound(results)
+            self._prune_logs()
 
         except Exception as e:
             self.log("ERROR", f"Maintenance failed: {e}")
             self.stats["errors"] += 1
             if self.verbose:
                 traceback.print_exc()
+
+    def _prune_logs(self):
+        """Age out the game logs, at most once an hour: log_dir can hold tens of
+        thousands of them, and a run every few minutes needn't read it each time."""
+        now = time.monotonic()
+        if self._last_log_prune is not None and now - self._last_log_prune < LOG_PRUNE_EVERY:
+            return
+        self._last_log_prune = now
+        try:
+            self.game_runner.prune_logs()
+        except Exception as e:
+            self.log("WARNING", f"Pruning game logs failed: {e}")
 
     def _check_inbound(self, results: Dict[str, GameRunResult]):
         """Warn about, and record for metrics.json, any packet maintenance left

@@ -110,6 +110,7 @@ run_maintenance_on_download = true # unless a league sets its own (below)
 dosemu_path = "/usr/bin/dosemu"
 dosemu_config_dir = "./dosemu_configs"
 log_dir = "./logs"
+log_days = 30                     # game logs older than this are deleted; 0 keeps all
 # Optional: DOS drives the games were set up on, mapped with lredir
 # dosemu_drives = { M = "/opt/bbs" }
 ```
