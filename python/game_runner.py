@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from client import GAME_LETTERS
+
 
 # cmd.exe (Windows) and COMMAND.COM (the batch file under dosemu) give these
 # a meaning of their own: chaining, redirection, variables. None belongs in a
@@ -58,10 +60,12 @@ DEFAULT_LOG_DAYS = 30
 PRUNE_FAILURES_NAMED = 2
 
 
-def run_log_name(game_type: str, league_id: str) -> "re.Pattern":
-    """The names this client gives one league's run logs, and nothing else:
-    {game_type}_{league_id}_{%Y%m%d_%H%M%S}.log, as the runs below write them."""
-    return re.compile(rf"{re.escape(game_type)}_{re.escape(str(league_id))}_\d{{8}}_\d{{6}}\.log")
+# The names this client gives a run's log, {game_type}_{league_id}_{stamp}.log
+# as the runs below write them, for any game it plays and any league number:
+# so a league dropped from the config still ages out, and nothing a sysop is
+# likely to name a file can match. The game is as the config spells it.
+RUN_LOG_NAME = re.compile(
+    rf"(?:{'|'.join(GAME_LETTERS)})_\d{{1,3}}_\d{{8}}_\d{{6}}\.log", re.IGNORECASE)
 
 
 def is_native(game_type: str, league_config: dict) -> bool:
@@ -145,19 +149,13 @@ class GameRunner:
         """Delete the game runs' logs in log_dir older than daemon.log_days.
         Returns how many went.
 
-        Only a log this client writes is touched: a name built from one of the
-        configured leagues. Anything else in log_dir, including logs of a
-        league since removed from the config, is left alone."""
+        Only a name this client gives a run's log is touched (RUN_LOG_NAME);
+        anything else in log_dir is left alone."""
         daemon_config = self.config.get("daemon", {})
         days = daemon_config.get("log_days", DEFAULT_LOG_DAYS)
         if not days:
             return 0
         log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
-        names = [run_log_name(game_type, league_id)
-                 for game_type, leagues in self.config.get("leagues", {}).items()
-                 for league_id in leagues]
-        if not names:
-            return 0
         cutoff = time.time() - days * 86400
         removed = 0
         failed = []
@@ -166,7 +164,7 @@ class GameRunner:
         except OSError:
             return 0
         for entry in entries:
-            if not any(n.fullmatch(entry.name) for n in names):
+            if not RUN_LOG_NAME.fullmatch(entry.name):
                 continue
             try:
                 if entry.is_file() and entry.stat().st_mtime < cutoff:

@@ -3,8 +3,8 @@
 Every game run writes a log of its own, so a board running two leagues every
 ten minutes gains nearly three hundred files a day; eclipse had 27,816 of them
 (163 MB) by October 2026. daemon.log_days, default 30, ages them out; 0 keeps
-them all, and nothing but a log this client wrote for a configured league is
-ever touched.
+them all, and nothing but a name this client gives a run's log is ever
+touched, for any game it plays and any league number.
 """
 import os
 import sys
@@ -57,10 +57,10 @@ def test_old_game_logs_go_and_new_ones_stay(logs):
 def test_only_this_clients_logs_are_touched(logs):
     others = [_log(logs, name, 400) for name in
               ("daemon.log", "notes.txt", "BRE_015_old.log", "BRE_015_20260806_000417.log.gz",
-               # Shaped like ours, but no configured league wrote them.
-               "BRE_555_20260806_000417.log", "FE_902_20260806_000417.log",
-               "bre_015_20260806_000417.log", "SYSOP_backup_20260806_000417.log",
-               "BRE_015_2026080_0004170.log")]
+               # Close to ours, but not a name this client gives a log.
+               "SYSOP_backup_20260806_000417.log", "LORD_015_20260806_000417.log",
+               "BRE_0155_20260806_000417.log", "BRE__20260806_000417.log",
+               "BRE_015_2026080_0004170.log", "xBRE_015_20260806_000417.log")]
     (logs / "FE_015_20260806_000418.log").mkdir()
     assert _runner(logs).prune_logs() == 0
     assert all(p.exists() for p in others)
@@ -77,10 +77,11 @@ def test_no_log_dir_yet_is_not_an_error(tmp_path):
     assert _runner(tmp_path / "missing").prune_logs() == 0
 
 
-def test_a_league_dropped_from_the_config_keeps_its_logs(logs):
-    log = _log(logs, "FE_015_20260806_000418.log", 40)
-    assert _runner(logs, leagues={"BRE": {"015": {}}}).prune_logs() == 0 and log.exists()
-    assert _runner(logs, leagues={}).prune_logs() == 0 and log.exists()
+def test_a_league_dropped_from_the_config_still_ages_out(logs):
+    gone = [_log(logs, "FE_555_20260806_000418.log", 40),
+            _log(logs, "bre_13_20260806_000418.log", 40)]  # a lower-case config key
+    assert _runner(logs, leagues={"BRE": {"015": {}}}).prune_logs() == 2
+    assert not any(p.exists() for p in gone)
 
 
 def test_failures_are_one_line_however_many(logs, monkeypatch, capsys):
