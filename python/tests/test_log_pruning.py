@@ -3,7 +3,8 @@
 Every game run writes a log of its own, so a board running two leagues every
 ten minutes gains nearly three hundred files a day; eclipse had 27,816 of them
 (163 MB) by October 2026. daemon.log_days, default 30, ages them out; 0 keeps
-them all, and nothing but a game run's log is ever touched.
+them all, and nothing but a log this client wrote for a configured league is
+ever touched.
 """
 import os
 import sys
@@ -35,8 +36,11 @@ def logs(tmp_path):
     return log_dir
 
 
-def _runner(log_dir, **daemon):
-    return GameRunner({"daemon": {"log_dir": str(log_dir), **daemon}})
+LEAGUES = {"BRE": {"015": {}}, "FE": {"015": {}}, "IB": {"902": {}}}
+
+
+def _runner(log_dir, leagues=LEAGUES, **daemon):
+    return GameRunner({"daemon": {"log_dir": str(log_dir), **daemon}, "leagues": leagues})
 
 
 def test_old_game_logs_go_and_new_ones_stay(logs):
@@ -50,9 +54,13 @@ def test_old_game_logs_go_and_new_ones_stay(logs):
     assert all(p.exists() for p in new)
 
 
-def test_only_a_game_runs_log_is_touched(logs):
+def test_only_this_clients_logs_are_touched(logs):
     others = [_log(logs, name, 400) for name in
-              ("daemon.log", "notes.txt", "BRE_015_old.log", "BRE_015_20260806_000417.log.gz")]
+              ("daemon.log", "notes.txt", "BRE_015_old.log", "BRE_015_20260806_000417.log.gz",
+               # Shaped like ours, but no configured league wrote them.
+               "BRE_555_20260806_000417.log", "FE_902_20260806_000417.log",
+               "bre_015_20260806_000417.log", "SYSOP_backup_20260806_000417.log",
+               "BRE_015_2026080_0004170.log")]
     (logs / "FE_015_20260806_000418.log").mkdir()
     assert _runner(logs).prune_logs() == 0
     assert all(p.exists() for p in others)
@@ -67,6 +75,26 @@ def test_log_days_sets_the_age_and_zero_keeps_everything(logs):
 
 def test_no_log_dir_yet_is_not_an_error(tmp_path):
     assert _runner(tmp_path / "missing").prune_logs() == 0
+
+
+def test_a_league_dropped_from_the_config_keeps_its_logs(logs):
+    log = _log(logs, "FE_015_20260806_000418.log", 40)
+    assert _runner(logs, leagues={"BRE": {"015": {}}}).prune_logs() == 0 and log.exists()
+    assert _runner(logs, leagues={}).prune_logs() == 0 and log.exists()
+
+
+def test_failures_are_one_line_however_many(logs, monkeypatch, capsys):
+    for i in range(50):
+        _log(logs, f"BRE_015_20260806_{i:06d}.log", 40)
+
+    def refuse(self, *a, **kw):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(Path, "unlink", refuse)
+    assert _runner(logs).prune_logs() == 0
+    warnings = [line for line in capsys.readouterr().out.splitlines() if "WARNING" in line]
+    assert len(warnings) == 1, warnings
+    assert "Could not prune 50 game log(s)" in warnings[0]
+    assert "and 48 more" in warnings[0] and "Permission denied" in warnings[0]
 
 
 def _daemon(tmp_path, extra=""):

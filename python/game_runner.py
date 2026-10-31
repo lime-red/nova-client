@@ -52,9 +52,16 @@ NATIVE_GAMES = {"IB"}
 
 # Every game run writes a log of its own, BRE_015_20261031_075417.log, so
 # log_dir grows by one file per league per run. daemon.log_days, default 30;
-# 0 keeps them all. Only names of this shape are ever pruned.
+# 0 keeps them all.
 DEFAULT_LOG_DAYS = 30
-RUN_LOG_NAME = re.compile(r"[A-Za-z]+_[0-9A-Za-z]+_\d{8}_\d{6}\.log")
+# How many failed names a prune warning lists before "and N more".
+PRUNE_FAILURES_NAMED = 2
+
+
+def run_log_name(game_type: str, league_id: str) -> "re.Pattern":
+    """The names this client gives one league's run logs, and nothing else:
+    {game_type}_{league_id}_{%Y%m%d_%H%M%S}.log, as the runs below write them."""
+    return re.compile(rf"{re.escape(game_type)}_{re.escape(str(league_id))}_\d{{8}}_\d{{6}}\.log")
 
 
 def is_native(game_type: str, league_config: dict) -> bool:
@@ -136,27 +143,46 @@ class GameRunner:
 
     def prune_logs(self) -> int:
         """Delete the game runs' logs in log_dir older than daemon.log_days.
-        Returns how many went."""
+        Returns how many went.
+
+        Only a log this client writes is touched: a name built from one of the
+        configured leagues. Anything else in log_dir, including logs of a
+        league since removed from the config, is left alone."""
         daemon_config = self.config.get("daemon", {})
         days = daemon_config.get("log_days", DEFAULT_LOG_DAYS)
         if not days:
             return 0
         log_dir = Path(daemon_config.get("log_dir", "./logs")).resolve()
+        names = [run_log_name(game_type, league_id)
+                 for game_type, leagues in self.config.get("leagues", {}).items()
+                 for league_id in leagues]
+        if not names:
+            return 0
         cutoff = time.time() - days * 86400
         removed = 0
+        failed = []
         try:
             entries = list(log_dir.iterdir())
         except OSError:
             return 0
         for entry in entries:
-            if not RUN_LOG_NAME.fullmatch(entry.name):
+            if not any(n.fullmatch(entry.name) for n in names):
                 continue
             try:
                 if entry.is_file() and entry.stat().st_mtime < cutoff:
                     entry.unlink()
                     removed += 1
             except OSError as e:
-                self.log("WARNING", f"Could not prune {entry}: {e}")
+                failed.append((entry.name, e))
+        if failed:
+            # One line, not one per file: a log_dir the daemon can't write to
+            # would fail on every old log at once.
+            shown = ", ".join(name for name, _ in failed[:PRUNE_FAILURES_NAMED])
+            more = len(failed) - PRUNE_FAILURES_NAMED
+            if more > 0:
+                shown += f", and {more} more"
+            self.log("WARNING", f"Could not prune {len(failed)} game log(s) in {log_dir}: "
+                                f"{shown} ({failed[0][1].strerror or failed[0][1]})")
         if removed:
             self.log("INFO", f"Pruned {removed} game log(s) older than {days} days")
         return removed

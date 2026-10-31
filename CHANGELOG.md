@@ -12,8 +12,10 @@ Python-only release, which is the code that had been running in production.
   of its own in `log_dir`, which nothing ever deleted: eclipse had 27,816 of them
   (163 MB) after three months. Logs older than `daemon.log_days` (default 30; 0
   keeps them all) are deleted after maintenance, checked at most once an hour.
-  Only files named as a game run's log are touched. The PowerShell client writes
-  no per-run logs, so has nothing to prune.
+  Only a log this client wrote for a league in its config is touched; a league
+  dropped from the config keeps its logs. Files it can't delete are reported in
+  one warning. The PowerShell client writes no per-run logs, so has nothing to
+  prune.
 
 ## [0.6.0] — 2026-10-30
 
