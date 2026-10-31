@@ -7,6 +7,11 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-11-01
+
+Game logs stop piling up. Works against any hub 0.6.0 did; the vendored spec is
+nova-hub v0.11.0's, unchanged but for its version.
+
 ### Added
 - **The daemon ages out its game logs** (Python). Every game run writes a log
   of its own in `log_dir`, which nothing ever deleted: eclipse had 27,816 of them
