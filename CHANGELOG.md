@@ -7,6 +7,14 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
+### Added
+- **The daemon ages out its game logs** (Python). Every game run writes a log
+  of its own in `log_dir`, which nothing ever deleted: eclipse had 27,816 of them
+  (163 MB) after three months. Logs older than `daemon.log_days` (default 30; 0
+  keeps them all) are deleted after maintenance, checked at most once an hour.
+  Only files named as a game run's log are touched. The PowerShell client writes
+  no per-run logs, so has nothing to prune.
+
 ## [0.6.0] — 2026-10-30
 
 Immortal Barons leagues, both clients. Needs nova-hub 0.10.0 or later for an IB league;

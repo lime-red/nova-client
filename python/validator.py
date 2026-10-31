@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import toml
 
 from client import DEFAULT_ARCHIVE_DAYS, GAME_LETTERS, NODES_FILES, SENT_ACTIONS
-from game_runner import GameRunner, check_command, is_native
+from game_runner import DEFAULT_LOG_DAYS, GameRunner, check_command, is_native
 from nodes_parser import NodesFileParser
 
 
@@ -382,6 +382,12 @@ class ClientValidator:
         if isinstance(archive_days, bool) or not isinstance(archive_days, int) or archive_days < 0:
             self.errors.append(
                 ValidationError("Config", f"sync.archive_days must be a whole number of days (0 keeps all), got {archive_days!r}")
+            )
+
+        log_days = self.config.get("daemon", {}).get("log_days", DEFAULT_LOG_DAYS)
+        if isinstance(log_days, bool) or not isinstance(log_days, int) or log_days < 0:
+            self.errors.append(
+                ValidationError("Config", f"daemon.log_days must be a whole number of days (0 keeps all), got {log_days!r}")
             )
 
         drives = self.config.get("daemon", {}).get("dosemu_drives") or {}

@@ -47,6 +47,9 @@ dosemu_term = "linux"
 # the same drive. game_dos_path can then use it ("M:\\DOORS\\BRE_015").
 # dosemu_drives = { M = "/opt/bbs" }
 log_dir = "./logs"
+# Each game run writes its own log in log_dir. Logs older than this many days
+# are deleted, checked at most once an hour; 0 keeps them all.
+log_days = 30
 
 # Define your leagues here
 # BBS ID is assigned per league and should match what's configured in the hub admin interface
