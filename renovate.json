@@ -1,3 +1,22 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "python/requirements.txt is uv export of uv.lock, remade by the post-upgrade task below: never edit it alone, or CI fails its lock check",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["python/requirements.txt"],
+      "enabled": false
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": ["uv export --frozen --no-dev --no-emit-project --no-hashes -o python/requirements.txt"],
+    "fileFilters": ["python/requirements.txt"],
+    "executionMode": "branch",
+    "installTools": {
+      "uv": {}
+    }
+  }
 }
