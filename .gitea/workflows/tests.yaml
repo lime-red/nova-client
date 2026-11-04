@@ -4,15 +4,14 @@ on: [push, pull_request, workflow_dispatch]
 jobs:
   python:
     runs-on: ubuntu-latest
-    # Every Python the client is meant to run on, not one: the floor
-    # (requires-python >= 3.12), what the boards run (3.13 on all of them,
-    # 2026-11-04), and the newest the lock installs on. 3.15 is not here yet:
-    # the mock hub's pydantic-core has no build for it. Add it when `uv sync
-    # --python 3.15` works, and move the floor with requires-python.
+    # Every Python the client says it supports: "3.12+" (requires-python and
+    # both READMEs), so every release from 3.12 to the newest. Add each new
+    # release here when it comes out; move the floor only together with
+    # requires-python and the READMEs.
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.12', '3.13', '3.14']
+        python: ['3.12', '3.13', '3.14', '3.15']
     defaults:
       run:
         working-directory: python
