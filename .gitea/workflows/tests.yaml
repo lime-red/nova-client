@@ -11,6 +11,14 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    # Every Python the client says it supports: "3.12+" (requires-python and
+    # both READMEs), so every release from 3.12 to the newest. Add each new
+    # release here when it comes out; move the floor only together with
+    # requires-python and the READMEs.
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13', '3.14', '3.15']
     defaults:
       run:
         working-directory: python
@@ -18,10 +26,10 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
 
       - name: Install dependencies
         # Exactly what uv.lock says, dev group included. --locked fails if
@@ -30,11 +38,16 @@ jobs:
         working-directory: .
         run: |
           python -m pip install uv==0.9.22
-          uv sync --locked --python 3.12
+          # The same version as setup-python: the venv is what the tests run on,
+          # so this is the line that decides it.
+          uv sync --locked --python ${{ matrix.python }}
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python -c 'import sys; v = "%d.%d" % sys.version_info[:2]; assert v == "${{ matrix.python }}", v'
 
       - name: python/requirements.txt is the lock's export
         # pip users install from it, so it must be exactly what was tested.
+        # The export is the same on every Python, so check it once.
+        if: matrix.python == '3.13'
         working-directory: .
         run: |
           uv export --frozen --no-dev --no-emit-project --no-hashes -o python/requirements.txt
@@ -55,13 +68,13 @@ jobs:
       - name: Set up Python (for the mock hub the Pester tests run against)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install mock server dependencies
         # Into .venv at the repo root, where the Pester tests look first.
         run: |
           python -m pip install uv==0.9.22
-          uv sync --locked --python 3.12
+          uv sync --locked --python 3.13
 
       # The runner image has no PowerShell, so every `shell: pwsh` step failed
       # before running anything: this job was red on every push from the day it
