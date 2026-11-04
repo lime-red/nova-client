@@ -1,5 +1,12 @@
 name: Nova Client Tests
-on: [push, pull_request, workflow_dispatch]
+# Branches are tested once, through their PR; main on push. Pushing every
+# branch as well ran each PR commit twice on the one shared runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   python:
