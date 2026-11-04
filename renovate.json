@@ -6,17 +6,44 @@
   "packageRules": [
     {
       "description": "python/requirements.txt is uv export of uv.lock, remade by the post-upgrade task below: never edit it alone, or CI fails its lock check",
-      "matchManagers": ["pip_requirements"],
-      "matchFileNames": ["python/requirements.txt"],
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchFileNames": [
+        "python/requirements.txt"
+      ],
       "enabled": false
+    },
+    {
+      "description": "Python dependencies move in uv.lock (a >= range already allows the new version), and every such update remakes python/requirements.txt from it",
+      "matchManagers": [
+        "pep621"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "postUpgradeTasks": {
+        "commands": [
+          "uv export --frozen --no-dev --no-emit-project --no-hashes -o python/requirements.txt"
+        ],
+        "fileFilters": [
+          "python/requirements.txt"
+        ],
+        "executionMode": "branch"
+      }
+    },
+    {
+      "description": "Lock maintenance refreshes uv.lock, so it remakes python/requirements.txt too",
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "uv export --frozen --no-dev --no-emit-project --no-hashes -o python/requirements.txt"
+        ],
+        "fileFilters": [
+          "python/requirements.txt"
+        ],
+        "executionMode": "branch"
+      }
     }
-  ],
-  "postUpgradeTasks": {
-    "commands": ["uv export --frozen --no-dev --no-emit-project --no-hashes -o python/requirements.txt"],
-    "fileFilters": ["python/requirements.txt"],
-    "executionMode": "branch",
-    "installTools": {
-      "uv": {}
-    }
-  }
+  ]
 }
