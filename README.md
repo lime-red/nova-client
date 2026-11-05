@@ -84,8 +84,18 @@ config, and the hub's reset arrives afterwards into a game ready for it. If the 
 already downloaded files for the league, move them out of inbound, RESET, then put them
 back.
 
-Run RESET as the same user and group the client runs as, or give the folder back to them
-afterwards: the game files RESET writes must be writable by the client's game runs.
+The game files RESET writes must be writable by the client's game runs. On Linux the
+simplest way is a shared group: put yourself in the client user's group, give the game
+folder that group with the setgid bit on every directory, and use umask 002. Then files
+you make by hand take the client's group too:
+
+```bash
+chgrp -R <client-group> bre_969 && chmod -R g+rwX bre_969
+find bre_969 -type d -exec chmod g+s {} +
+```
+
+Unpacking an archive (tar, unzip) sets each directory's mode from the archive, which drops
+the setgid bit, so run the `find` again after unpacking.
 
 A game that has been played belongs to its league, and changing `bbs.cfg` does not change
 that:
