@@ -79,6 +79,14 @@ league's reset from the hub sets those values. A member board is not asked the
 league-wide question. Until RESET has run, maintenance stops with "Game files could not be
 opened. Please run BRE RESET", and leaves the hub's packets in inbound.
 
+**RESET empties the inbound folder.** So run it *before* you add the league to the client's
+config, and the hub's reset arrives afterwards into a game ready for it. If the client has
+already downloaded files for the league, move them out of inbound, RESET, then put them
+back.
+
+Run RESET as the same user and group the client runs as, or give the folder back to them
+afterwards: the game files RESET writes must be writable by the client's game runs.
+
 A game that has been played belongs to its league, and changing `bbs.cfg` does not change
 that:
 
@@ -101,7 +109,7 @@ member's game has to start fresh as well.
 
 **If you have already copied one:** move the copy aside, and make a fresh install in its
 place. Bring over only what you set up for this league (`bbs.cfg`, the nodes file, and your
-BBS's door files), and run RESET as above. Then ask the hub's operator to reset the
+BBS's door files), and run RESET as above, minding inbound. Then ask the hub's operator to reset the
 league again, unless a reset sent after the copy was moved aside is already waiting in
 inbound. A copy that is still in place when the reset arrives rejects it again.
 
