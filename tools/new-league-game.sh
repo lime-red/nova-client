@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
-# new-league-game.sh - make this board's game folder for a new BRE or FE league,
+# new-league-game.sh - make this board's game folder for a new BRE or FE league
 # from a golden image, and RESET it, ready for the league's reset from the hub.
 #
-#   tools/new-league-game.sh --image ~/bre-sj1-r2.tar.gz --league 969 \
-#       --folder /opt/eqx/bbs/EZY/DOORS/bre_969 --like /opt/eqx/bbs/EZY/DOORS/bre_015 \
-#       --drive M=/opt/eqx/bbs --service eqx-nova
+#   tools/new-league-game.sh --image ~/bre-sj1-r2.tar.gz --league 969
 #
-# What it does, in order:
+# Everything about this board comes from the client's own config.toml, the
+# same settings the client plays the game with:
+#   - the new league's game_folder and game_dos_path, from its [leagues.<GAME>.<NNN>]
+#     section. Not there yet? They are made from another league's (--like),
+#     with its number changed, and the section to add is printed at the end.
+#   - [daemon] dosemu_drives, for a board that reaches its games through a
+#     drive other than C:.
+#   - bbs.cfg, from the --like league's folder: its inbound and netmail paths
+#     and league number are changed to the new league's.
+#
+# The easy order: add the league to config.toml, let the client sync once (it
+# makes the folder's inbound and downloads the hub's nodelist and reset into
+# it), then run this. Running it first works too, given --nodes.
+#
+# What it does:
 #   1. Works everything out and shows the plan before changing anything.
-#   2. Stops --service, if given, so the client's maintenance can't run mid-way.
-#   3. Moves an existing --folder aside to <folder>.replaced-<time> (never deletes it),
-#      keeping whatever is waiting in its inbound.
-#   4. Unpacks the image, and writes bbs.cfg: --like's (or --bbs-cfg's), with the
-#      inbound and netmail paths and the league number changed to this league's.
-#   5. Installs the league's nodelist: --nodes, else the hub's from inbound.
-#   6. Gives the folder to the client's group, setgid on every directory, so
-#      files you or the game make later stay usable by the client.
-#   7. Moves inbound's files out of the way (RESET empties inbound), runs
-#      <GAME> RESET under dosemu for you to answer, and puts them back.
-#   8. Starts --service again.
+#   2. Stops the client's service, if one runs with this config (sudo).
+#   3. Moves an existing folder aside to <folder>.replaced-<time> (never deletes
+#      it), setting aside what is waiting in its inbound.
+#   4. Unpacks the image, writes bbs.cfg, installs the nodelist.
+#   5. Gives the folder the --like folder's group, setgid on every directory.
+#   6. Runs <GAME> RESET under dosemu for you to answer (RESET empties inbound,
+#      which is why inbound's files were set aside), then puts them back.
+#   7. Starts the service again.
 #
-# A fresh install, not a copy of a league you already play: a played game
+# A fresh install, never a copy of a league you already play: a played game
 # remembers its league's coordinator and rejects a new league's reset.
 set -euo pipefail
 
 me=$(basename "$0")
+here=$(cd "$(dirname "$0")" && pwd)
 die() { echo "$me: $*" >&2; exit 1; }
 say() { printf '%s\n' "$*"; }
 
@@ -33,39 +43,29 @@ usage() {
     cat <<'EOF'
 Options:
   --image FILE      golden image (bre-*.tar.gz or fe-*.tar.gz)             required
-  --league NNN      the league's number                                    required
-  --folder DIR      the game folder to make, e.g. .../DOORS/bre_969        required
-  --like DIR        a league folder on this board to take bbs.cfg from
-  --bbs-cfg FILE    or a bbs.cfg to take it from   (one of these two, unless
-                    --folder exists already and has a bbs.cfg of its own)
+  --league NNN      the new league's number                                required
+  --like NNN        a league of the same game in config.toml to copy bbs.cfg
+                    and the folder naming from (default: the only one there is)
+  --config FILE     the client's config.toml
+                    (default: python/config.toml beside this script)
   --nodes FILE      the league's nodelist, if the hub's isn't in inbound yet
-  --drive L=PATH    a dosemu drive the BBS reaches its games through, as in the
-                    client's [daemon] dosemu_drives (repeat for more). Without
-                    one, the folder must be under ~/.dosemu/drive_c.
-  --service UNIT    the client's systemd unit, stopped while this runs (sudo)
-  --group GROUP     the client's group (default: --folder's parent's group)
-  --dosemu PATH     dosemu to run (default: dosemu on PATH)
+  --service UNIT    the client's systemd unit (default: the one running with
+                    --config, found by itself); --service none to leave it be
   --no-reset        stop before RESET (you then RESET by hand, minding inbound)
   -y                don't ask before starting
   -h, --help        this
 EOF
 }
 
-image= league= folder= like= bbs_cfg= nodes= service= group= no_reset= yes=
-dosemu_bin=dosemu
-drives=()
+image= league= like= config= nodes= service= no_reset= yes=
 while [ $# -gt 0 ]; do
     case $1 in
         --image)   image=$2; shift ;;
         --league)  league=$2; shift ;;
-        --folder)  folder=$2; shift ;;
         --like)    like=$2; shift ;;
-        --bbs-cfg) bbs_cfg=$2; shift ;;
+        --config)  config=$2; shift ;;
         --nodes)   nodes=$2; shift ;;
-        --drive)   drives+=("$2"); shift ;;
         --service) service=$2; shift ;;
-        --group)   group=$2; shift ;;
-        --dosemu)  dosemu_bin=$2; shift ;;
         --no-reset) no_reset=1 ;;
         -y)        yes=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -74,20 +74,20 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-[ -n "$image" ] && [ -n "$league" ] && [ -n "$folder" ] || { usage >&2; exit 2; }
+[ -n "$image" ] && [ -n "$league" ] || { usage >&2; exit 2; }
 [ -f "$image" ] || die "no image at $image"
-[[ $league =~ ^[0-9]{1,3}$ ]] || die "league must be a number up to 999, not '$league'"
+for n in "$league" ${like:+"$like"}; do
+    [[ $n =~ ^[0-9]{1,3}$ ]] || die "a league number is up to 3 digits, not '$n'"
+done
 league=$(printf '%03d' "$((10#$league))")
+[ -z "$like" ] || like=$(printf '%03d' "$((10#$like))")
 command -v python3 >/dev/null || die "python3 is needed"
-[ -n "$no_reset" ] || command -v "$dosemu_bin" >/dev/null || die "no dosemu at '$dosemu_bin'"
-
-folder=$(realpath -m "$folder")
-parent=$(dirname "$folder")
-name=$(basename "$folder")
-[ -d "$parent" ] || die "$parent does not exist"
+config=${config:-$here/../python/config.toml}
+[ -r "$config" ] || die "can't read the client's config at $config (give --config)"
+config=$(realpath "$config")
 
 # The file or folder called $2 (any case) in folder $1, or nothing.
-ci() { find "$1" -maxdepth 1 -iname "$2" -print -quit 2>/dev/null; }
+ci() { [ -d "$1" ] && find "$1" -maxdepth 1 -iname "$2" -print -quit 2>/dev/null || true; }
 
 # --- the image -------------------------------------------------------------
 top=$(tar -tzf "$image" | awk -F/ 'NR == 1 { print $1 }')   # not head: SIGPIPE under pipefail
@@ -100,64 +100,101 @@ print(m["game"], m.get("recipe", "?"), m.get("version", "?"))' <<<"$manifest")
 case $game in
     B) exe=BRE; nodes_name=BRNODES.DAT; nodelist=BRNODES.$league ;;
     F) exe=FE;  nodes_name=FENODES.DAT; nodelist=FENODES.$league ;;
-    *) die "this script makes BRE and FE folders; $image is game '$game'" ;;
+    *) die "this makes BRE and FE folders; $image is game '$game'" ;;
 esac
 [ "$recipe" != "1" ] || die "$image is a recipe 1 image: it carries the donor league's COORD.KEY. Use an r2 image."
 
-# --- where DOS sees the folder ---------------------------------------------
-dos_path= drive_letters=() drive_paths=()
-for d in "${drives[@]}"; do
-    [[ $d =~ ^([A-Za-z]):?=(/.*)$ ]] || die "--drive takes L=/host/path, not '$d'"
-    letter=${BASH_REMATCH[1]^^}; path=$(realpath -m "${BASH_REMATCH[2]}")
-    [ "$letter" != C ] || die "--drive C is dosemu's own drive_c; give another letter"
-    drive_letters+=("$letter"); drive_paths+=("$path")
-    case $folder/ in
-        "$path"/*) [ -n "$dos_path" ] || dos_path="$letter:${folder#"$path"}" ;;
-    esac
-done
-if [ -z "$dos_path" ]; then
-    drive_c=$(realpath -m ~/.dosemu/drive_c)
-    case $folder/ in
-        "$drive_c"/*) dos_path="C:${folder#"$drive_c"}" ;;
-        *) die "$folder is not under ~/.dosemu/drive_c or any --drive: dosemu can't reach it" ;;
-    esac
-fi
-dos_path=${dos_path//\//\\}
-IFS='\' read -r -a parts <<<"${dos_path#?:}"
-for p in "${parts[@]}"; do
-    [ -z "$p" ] && continue
-    [ ${#p} -le 8 ] && [[ $p != *" "* ]] || die "'$p' in $dos_path is not a DOS 8.3 name: the game would silently read nothing from inbound"
-done
+# --- the board, from the client's config -----------------------------------
+# One line of tab-separated fields; python does the TOML and the path rules.
+plan=$(python3 - "$config" "$exe" "$league" "$like" <<'EOF'
+import os, sys, tomllib
+from pathlib import Path, PureWindowsPath
 
-# --- what the new folder takes from where ------------------------------------
-old=
-[ -e "$folder" ] && old="$folder.replaced-$(date +%Y%m%d-%H%M%S)"
+config, exe, league, like = sys.argv[1:]
+cfg = tomllib.load(open(config, "rb"))
+leagues = {f"{int(k):03d}": v for k, v in cfg.get("leagues", {}).get(exe, {}).items()}
+daemon = cfg.get("daemon", {})
+fail = lambda msg: sys.exit(f"{config}: {msg}")
 
-cfg_from=
-if [ -n "$bbs_cfg" ]; then cfg_from=$bbs_cfg
-elif [ -n "$like" ]; then cfg_from=$(ci "$like" bbs.cfg)
-elif [ -d "$folder" ]; then cfg_from=$(ci "$folder" bbs.cfg)
-fi
-[ -n "$cfg_from" ] && [ -f "$cfg_from" ] \
-    || die "no bbs.cfg to start from: give --like <a league folder> or --bbs-cfg <file>"
+if not like:
+    others = sorted(k for k in leagues if k != league)
+    if len(others) != 1:
+        fail(f"give --like: {exe} leagues here are {', '.join(others) or 'none'}")
+    like = others[0]
+if like not in leagues:
+    fail(f"no [leagues.{exe}.{like}] to take after")
+src = leagues[like]
+if not src.get("game_folder") or not src.get("game_dos_path"):
+    fail(f"[leagues.{exe}.{like}] has no game_folder / game_dos_path")
 
-# The inbound and netmail folder names, from the bbs.cfg we start from.
+def renumber(name: str) -> str:
+    """bre_015 -> bre_969, BRE015 -> BRE969: the old league's number, swapped."""
+    for old in (like, str(int(like))):
+        if old in name:
+            return name.replace(old, league)
+    fail(f"can't see league {like} in '{name}' to make {league}'s name from it; "
+         f"add [leagues.{exe}.{league}] with its game_folder and game_dos_path first")
+
+new_section = league not in leagues
+if new_section:
+    folder = str(Path(src["game_folder"]).with_name(renumber(Path(src["game_folder"]).name)))
+    dos = PureWindowsPath(src["game_dos_path"])
+    dos_path = str(dos.with_name(renumber(dos.name)))
+else:
+    dst = leagues[league]
+    folder, dos_path = dst.get("game_folder"), dst.get("game_dos_path")
+    if not folder or not dos_path:
+        fail(f"[leagues.{exe}.{league}] has no game_folder / game_dos_path")
+
+# Check DOS reaches the folder where game_dos_path says: C: is ~/.dosemu/drive_c,
+# other letters are [daemon] dosemu_drives, as the client maps them.
+drives = {str(k).rstrip(":").upper(): os.path.realpath(v)
+          for k, v in (daemon.get("dosemu_drives") or {}).items()}
+roots = dict(drives, C=os.path.realpath(os.path.expanduser("~/.dosemu/drive_c")))
+folder = os.path.realpath(os.path.expanduser(folder))
+letter = dos_path[:1].upper()
+if dos_path[1:2] != ":" or letter not in roots:
+    fail(f"game_dos_path {dos_path}: drive {letter}: is neither C: nor in [daemon] dosemu_drives")
+rel = os.path.relpath(folder, roots[letter])
+if rel.startswith("..") or rel.replace("/", "\\").lower() != dos_path[3:].lower():
+    fail(f"game_folder {folder} is not where {dos_path} points ({roots[letter]} is {letter}:)")
+for part in PureWindowsPath(dos_path).parts[1:]:
+    stem, _, ext = part.partition(".")
+    if len(stem) > 8 or len(ext) > 3 or " " in part:
+        fail(f"'{part}' in {dos_path} is not a DOS 8.3 name: the game would silently read nothing")
+
+like_folder = os.path.realpath(os.path.expanduser(src["game_folder"]))
+fields = [like, folder, dos_path, like_folder, "1" if new_section else "0",
+          daemon.get("dosemu_path", "dosemu"), " ".join(f"{k}={v}" for k, v in drives.items())]
+print("\t".join(fields))
+EOF
+) || exit 1
+IFS=$'\t' read -r like folder dos_path like_folder new_section dosemu_bin drive_list <<<"$plan"
+parent=$(dirname "$folder")
+name=$(basename "$folder")
+[ -d "$parent" ] || die "$parent does not exist"
+[ -n "$no_reset" ] || command -v "$dosemu_bin" >/dev/null || die "no dosemu at '$dosemu_bin'"
+
+cfg_from=$(ci "$like_folder" bbs.cfg)
+[ -n "$cfg_from" ] || die "league $like's folder $like_folder has no bbs.cfg"
+group=$(stat -c %G "$like_folder")
+id -nG | tr ' ' '\n' | grep -qx "$group" || die "you are not in group '$group', which $like_folder belongs to"
+
+# The inbound and netmail folder names, from league $like's bbs.cfg.
 read -r in_name net_name < <(python3 - "$cfg_from" <<'EOF'
 import sys
 lines = open(sys.argv[1], "rb").read().decode("cp437").splitlines()
 if len(lines) < 6:
     sys.exit(f"{sys.argv[1]} has {len(lines)} lines; a bbs.cfg has at least 6")
-last = lambda s: s.strip().rstrip("\\").split("\\")[-1] or "x"
+last = lambda s: s.strip().rstrip("\\").split("\\")[-1] or "INBOUND"
 print(last(lines[3]), last(lines[4]))
 EOF
 )
-for n in "$in_name" "$net_name"; do
-    [ ${#n} -le 8 ] || die "'$n' (from $cfg_from) is not a DOS 8.3 name"
-done
 
-# What is waiting in the old folder's inbound: the hub's packets for this league.
-old_inbound=
-[ -d "$folder" ] && old_inbound=$(ci "$folder" "$in_name")
+# --- what is there already ------------------------------------------------------
+old=
+[ -e "$folder" ] && old="$folder.replaced-$(date +%Y%m%d-%H%M%S)"
+old_inbound=$(ci "$folder" "$in_name")
 waiting=()
 if [ -n "$old_inbound" ]; then
     while IFS= read -r -d '' f; do waiting+=("$f"); done \
@@ -165,29 +202,32 @@ if [ -n "$old_inbound" ]; then
 fi
 
 nodes_from=$nodes
-if [ -z "$nodes_from" ] && [ -n "$old_inbound" ]; then nodes_from=$(ci "$old_inbound" "$nodelist"); fi
-if [ -z "$nodes_from" ] && [ -d "$folder" ]; then
-    nodes_from=$(ci "$folder" "$nodes_name")
-    [ -z "$nodes_from" ] || say "note: no $nodelist waiting in inbound; using the old folder's $nodes_name"
-fi
-[ -n "$nodes_from" ] && [ -f "$nodes_from" ] || die "no nodelist for league $league.
-  Give --nodes <file>, or add the league to the client's config and let it download
-  $nodelist into the folder's inbound first, then run this again."
+[ -n "$nodes_from" ] || nodes_from=$(ci "$old_inbound" "$nodelist")
+[ -n "$nodes_from" ] || nodes_from=$(ci "$folder" "$nodes_name")
+[ -n "$nodes_from" ] && [ -f "$nodes_from" ] || die "no nodelist for league $league yet.
+  Add the league to $config and let the client sync once: it downloads
+  $nodelist into $name's inbound. Or give --nodes <file>."
 
-[ -n "$group" ] || group=$(stat -c %G "$parent")
-id -nG | tr ' ' '\n' | grep -qx "$group" \
-    || die "you are not in group '$group'; add yourself (and log in again) or give --group"
+if [ -z "$service" ]; then
+    while read -r unit _; do
+        systemctl cat "$unit" 2>/dev/null | grep -q -- "--config $config\b" && { service=$unit; break; }
+    done < <(systemctl list-units --type=service --state=running --no-legend --plain 2>/dev/null)
+fi
+[ "$service" != none ] || service=
 
 # --- the plan ------------------------------------------------------------------
 say "Making $exe league $league at $folder ($dos_path)"
 say "  image     $image  ($version, recipe $recipe)"
-[ -z "$old" ] || say "  existing  moved aside to $old"
-say "  bbs.cfg   from $cfg_from: inbound/netmail under $dos_path, league $league"
-say "  nodelist  from $nodes_from"
+say "  config    $config"
+[ "$new_section" = 0 ] || say "            (no [leagues.$exe.$league] there yet: named after league $like)"
+[ -z "$old" ] || say "  existing  moved aside to $(basename "$old")"
+say "  bbs.cfg   league $like's, with league $league's paths and number"
+say "  nodelist  $nodes_from"
 say "  inbound   ${#waiting[@]} waiting file(s), set aside during RESET and put back"
-say "  group     $group, setgid folders, umask 002"
-[ -z "$service" ] || say "  service   $service stopped meanwhile (sudo)"
-if [ -n "$no_reset" ]; then say "  RESET     not run (--no-reset)"; else say "  RESET     $exe RESET, under dosemu, for you to answer"; fi
+say "  group     $group (as league $like's folder), setgid folders"
+[ -z "$drive_list" ] || say "  drives    $drive_list"
+if [ -n "$service" ]; then say "  service   $service, stopped meanwhile (sudo)"; else say "  service   none found running with this config"; fi
+if [ -n "$no_reset" ]; then say "  RESET     not run (--no-reset)"; else say "  RESET     $exe RESET under dosemu, for you to answer"; fi
 if [ -z "$yes" ]; then
     read -r -p "Go ahead? [y/N] " ok
     [[ $ok == [yY]* ]] || die "nothing changed"
@@ -223,14 +263,11 @@ fi
 stash=$(mktemp -d "$parent/.$name.inbound.XXXXXX")
 for f in "${waiting[@]}"; do mv "$f" "$stash/"; done
 [ "${#waiting[@]}" -eq 0 ] || say "Set aside ${#waiting[@]} inbound file(s) in $stash"
-# The nodelist moved with them.
-[ -z "$old_inbound" ] || case $nodes_from in
-    "$old_inbound"/*) nodes_from=$stash/$(basename "$nodes_from") ;;
+case $nodes_from in
+    "$old_inbound"/*) [ -z "$old_inbound" ] || nodes_from=$stash/$(basename "$nodes_from") ;;
 esac
-
 if [ -n "$old" ]; then
     mv "$folder" "$old"
-    case $cfg_from in "$folder"/*) cfg_from=$old/${cfg_from#"$folder"/} ;; esac
     case $nodes_from in "$folder"/*) nodes_from=$old/${nodes_from#"$folder"/} ;; esac
 fi
 
@@ -245,18 +282,23 @@ for want in "$in_name" "$net_name"; do
     fi
 done
 
-python3 - "$cfg_from" "$folder/bbs.cfg" "$dos_path" "$league" <<'EOF'
+# bbs.cfg / BBS.CFG and BRNODES.DAT / brnodes.dat: named as league $like's folder
+# names them, and only once: a case twin leaves the game reading the wrong one.
+cfg_name=$(basename "$cfg_from")
+nodes_dst=$(ci "$like_folder" "$nodes_name"); nodes_dst=$(basename "${nodes_dst:-$nodes_name}")
+find "$folder" -maxdepth 1 \( -iname bbs.cfg -o -iname "$nodes_name" \) -delete
+
+python3 - "$cfg_from" "$folder/$cfg_name" "$dos_path" "$league" <<'EOF'
 import sys
 src, dst, dos, league = sys.argv[1:]
-raw = open(src, "rb").read().decode("cp437")
-lines = raw.splitlines()
+lines = open(src, "rb").read().decode("cp437").splitlines()
 last = lambda s: s.strip().rstrip("\\").split("\\")[-1]
 lines[3] = f"{dos}\\{last(lines[3])}"
 lines[4] = f"{dos}\\{last(lines[4])}"
 lines[5] = league
 open(dst, "wb").write(("\r\n".join(lines) + "\r\n").encode("cp437"))
 EOF
-cp "$nodes_from" "$folder/$nodes_name"
+cp "$nodes_from" "$folder/$nodes_dst"
 
 fix_group() {
     chgrp -R "$group" "$folder"
@@ -272,13 +314,11 @@ if [ -z "$no_reset" ]; then
     {
         printf '%s\n' '$_layout = "us"' '$_floppy_a = ""' '$_xms = (8192)' '$_ems = (8192)' \
             '$_com1 = ""' '$_com2 = ""'
-        [ ${#drive_paths[@]} -eq 0 ] || printf '$_lredir_paths = "%s"\n' "${drive_paths[*]}"
+        [ -z "$drive_list" ] || printf '$_lredir_paths = "%s"\n' "$(tr ' ' '\n' <<<"$drive_list" | cut -d= -f2- | tr '\n' ' ' | sed 's/ $//')"
     } >"$conf"
     {
         printf '@ECHO OFF\r\n'
-        for i in "${!drive_letters[@]}"; do
-            printf 'lredir -f %s: %s\r\n' "${drive_letters[$i]}" "${drive_paths[$i]}"
-        done
+        for d in $drive_list; do printf 'lredir -f %s: %s\r\n' "${d%%=*}" "${d#*=}"; done
         printf '%s\r\nCD %s\r\n%s RESET\r\nEXIT\r\n' "${dos_path:0:2}" "$dos_path" "$exe"
     } >"$batch_dir/RESET.BAT"
 
@@ -306,19 +346,37 @@ EOF
     say "RESET made $(ls "$data" | tr '\n' ' ')"
 fi
 
-inbound=$folder/$in_name
-for f in "$stash"/*; do [ -e "$f" ] && mv "$f" "$inbound/"; done
+for f in "$stash"/*; do [ -e "$f" ] && mv "$f" "$folder/$in_name/"; done
 fix_group
 
 say ""
 say "Done: $folder is league $league's $exe game for this board."
 [ -z "$old" ] || say "The old folder is at $old: delete it once the league is running."
+if [ "$new_section" = 1 ]; then
+    say ""
+    say "Add this to $config, beside [leagues.$exe.$like]:"
+    python3 - "$config" "$exe" "$like" "$league" "$folder" "$dos_path" <<'EOF'
+import sys, tomllib
+config, exe, like, league, folder, dos = sys.argv[1:]
+src = {f"{int(k):03d}": v for k, v in tomllib.load(open(config, "rb"))["leagues"][exe].items()}[like]
+print(f"\n[leagues.{exe}.{league}]")
+for key, value in src.items():
+    value = {"game_folder": folder, "game_dos_path": dos}.get(key, value)
+    if isinstance(value, bool):
+        print(f"{key} = {str(value).lower()}")
+    elif isinstance(value, (int, float)):
+        print(f"{key} = {value}")
+    else:
+        print(f'{key} = "' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"')
+EOF
+fi
+say ""
 if [ -n "$no_reset" ]; then
     say "Next: $exe RESET in $dos_path. It empties $in_name, so move its files out and back."
 elif [ "${#waiting[@]}" -gt 0 ]; then
     say "${#waiting[@]} file(s) back in $in_name: the client's next maintenance takes them in."
-    say "If none of them is a reset sent after this board's game was replaced, ask the hub to reset the league."
+    say "If none of them is a reset the hub sent after this board's game was replaced,"
+    say "ask the hub to reset the league again."
 else
-    say "Next: add league $league to the client's config, if it isn't there yet, and ask the hub"
-    say "to reset the league: this game takes that reset in at its next maintenance."
+    say "Next: ask the hub to reset the league; this game takes it in at its next maintenance."
 fi

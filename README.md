@@ -73,14 +73,16 @@ copy the folder of a league you already play, even if you change the league numb
 `bbs.cfg` afterwards.
 
 On Linux, [`tools/new-league-game.sh`](tools/new-league-game.sh) does all of what follows
-from a golden image of BRE or FE: it unpacks it, writes `bbs.cfg` from one of your other
-leagues, installs the nodelist, sets the folder's group, and runs RESET for you to answer
-with inbound's files set aside. An existing folder is moved aside, not deleted. For example:
+from a golden image of BRE or FE. It takes everything about your board from the client's
+`config.toml`: the league's `game_folder` and `game_dos_path` (or another league's, renamed,
+if the league isn't there yet) and `[daemon] dosemu_drives`. It unpacks the image, writes
+`bbs.cfg` from your other league's, installs the hub's nodelist, sets the folder's group,
+and runs RESET for you to answer with inbound's files set aside. An existing folder is
+moved aside, not deleted. Add the league to `config.toml` and let the client sync once
+first, so the hub's nodelist is waiting; then:
 
 ```bash
-tools/new-league-game.sh --image ~/bre-sj1-r2.tar.gz --league 969 \
-    --folder /opt/eqx/bbs/EZY/DOORS/bre_969 --like /opt/eqx/bbs/EZY/DOORS/bre_015 \
-    --drive M=/opt/eqx/bbs --service eqx-nova
+tools/new-league-game.sh --image ~/bre-sj1-r2.tar.gz --league 969
 ```
 
 It shows its plan and asks before changing anything; `--help` lists the options.
