@@ -72,6 +72,13 @@ Give each league its own **fresh install** of the game, set up for that league. 
 copy the folder of a league you already play, even if you change the league number in
 `bbs.cfg` afterwards.
 
+A fresh install is not a game yet: its `DATA/` is empty. Once `bbs.cfg` and the nodes file
+are in place, run `BRE RESET` (or `FE RESET`) in the folder once. Answer **Y** to reset the
+game, then press ESC to leave the Configuration Editor without changing anything: the
+league's reset from the hub sets those values. A member board is not asked the
+league-wide question. Until RESET has run, maintenance stops with "Game files could not be
+opened. Please run BRE RESET", and leaves the hub's packets in inbound.
+
 A game that has been played belongs to its league, and changing `bbs.cfg` does not change
 that:
 
@@ -94,8 +101,9 @@ member's game has to start fresh as well.
 
 **If you have already copied one:** move the copy aside, and make a fresh install in its
 place. Bring over only what you set up for this league (`bbs.cfg`, the nodes file, and your
-BBS's door files). Then ask the hub's operator to reset the league again. A copy that is
-still in place when the reset arrives rejects it again.
+BBS's door files), and run RESET as above. Then ask the hub's operator to reset the
+league again, unless a reset sent after the copy was moved aside is already waiting in
+inbound. A copy that is still in place when the reset arrives rejects it again.
 
 ## Packet naming
 
