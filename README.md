@@ -72,6 +72,19 @@ Give each league its own **fresh install** of the game, set up for that league. 
 copy the folder of a league you already play, even if you change the league number in
 `bbs.cfg` afterwards.
 
+On Linux, [`tools/new-league-game.sh`](tools/new-league-game.sh) does all of what follows
+from a golden image of BRE or FE: it unpacks it, writes `bbs.cfg` from one of your other
+leagues, installs the nodelist, sets the folder's group, and runs RESET for you to answer
+with inbound's files set aside. An existing folder is moved aside, not deleted. For example:
+
+```bash
+tools/new-league-game.sh --image ~/bre-sj1-r2.tar.gz --league 969 \
+    --folder /opt/eqx/bbs/EZY/DOORS/bre_969 --like /opt/eqx/bbs/EZY/DOORS/bre_015 \
+    --drive M=/opt/eqx/bbs --service eqx-nova
+```
+
+It shows its plan and asks before changing anything; `--help` lists the options.
+
 A fresh install is not a game yet: its `DATA/` is empty. Once `bbs.cfg` and the nodes file
 are in place, run `BRE RESET` (or `FE RESET`) in the folder once. Answer **Y** to reset the
 game, then press ESC to leave the Configuration Editor without changing anything: the
