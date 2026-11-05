@@ -66,6 +66,37 @@ the repo root does the same: that file is exported from `uv.lock`.
 
 See [`python/README.md`](python/README.md), and [`linux/`](linux/) for the systemd unit.
 
+## Joining a league: start from a fresh install
+
+Give each league its own **fresh install** of the game, set up for that league. Never
+copy the folder of a league you already play, even if you change the league number in
+`bbs.cfg` afterwards.
+
+A game that has been played belongs to its league, and changing `bbs.cfg` does not change
+that:
+
+- **BRE and FE** record the League Coordinator they belong to in `DATA/GAME.DAT`. Every new
+  league's coordinator has a key of its own, so a copy rejects the new league's first reset.
+  `PROBLEMS.LOG` then says:
+  ```
+  Invalid Configuration Update #1 found and ignored
+  Illegal Global Reset Attempted
+  ```
+  The copy also carries on numbering its packets from the old league (a first packet
+  numbered `.027`, not `.001`). The hub reports the board as silent, because its game never
+  hears from it.
+- **Immortal Barons** keeps the old league's `coord.pub` and `ibnodes.dat`. The client fetches
+  each only when the file is missing, so it never replaces the copied ones.
+
+Copying a folder used to work because the hub's own games were copies too, and every league
+shared one coordinator key. From hub 0.13.0 each new league gets a key of its own, so a
+member's game has to start fresh as well.
+
+**If you have already copied one:** move the copy aside, and make a fresh install in its
+place. Bring over only what you set up for this league (`bbs.cfg`, the nodes file, and your
+BBS's door files). Then ask the hub's operator to reset the league again. A copy that is
+still in place when the reset arrives rejects it again.
+
 ## Packet naming
 
 Packet filenames carry their own routing information:
