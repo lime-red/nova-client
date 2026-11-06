@@ -66,6 +66,63 @@ the repo root does the same: that file is exported from `uv.lock`.
 
 See [`python/README.md`](python/README.md), and [`linux/`](linux/) for the systemd unit.
 
+## Joining a league: start from a fresh install
+
+Give each league its own **fresh install** of the game, set up for that league. Never
+copy the folder of a league you already play, even if you change the league number in
+`bbs.cfg` afterwards.
+
+A fresh install is not a game yet: its `DATA/` is empty. Once `bbs.cfg` and the nodes file
+are in place, run `BRE RESET` (or `FE RESET`) in the folder once. Answer **Y** to reset the
+game, then press ESC to leave the Configuration Editor without changing anything: the
+league's reset from the hub sets those values. A member board is not asked the
+league-wide question. Until RESET has run, maintenance stops with "Game files could not be
+opened. Please run BRE RESET", and leaves the hub's packets in inbound.
+
+**RESET empties the inbound folder.** So run it *before* you add the league to the client's
+config, and the hub's reset arrives afterwards into a game ready for it. If the client has
+already downloaded files for the league, move them out of inbound, RESET, then put them
+back.
+
+The game files RESET writes must be writable by the client's game runs. On Linux the
+simplest way is a shared group: put yourself in the client user's group, give the game
+folder that group with the setgid bit on every directory, and use umask 002. Then files
+you make by hand take the client's group too:
+
+```bash
+chgrp -R <client-group> bre_969 && chmod -R g+rwX bre_969
+find bre_969 -type d -exec chmod g+s {} +
+```
+
+Unpacking an archive (tar, unzip) sets each directory's mode from the archive, which drops
+the setgid bit, so run the `find` again after unpacking.
+
+A game that has been played belongs to its league, and changing `bbs.cfg` does not change
+that:
+
+- **BRE and FE** record the League Coordinator they belong to in `DATA/GAME.DAT`. Every new
+  league's coordinator has a key of its own, so a copy rejects the new league's first reset.
+  `PROBLEMS.LOG` then says:
+  ```
+  Invalid Configuration Update #1 found and ignored
+  Illegal Global Reset Attempted
+  ```
+  The copy also carries on numbering its packets from the old league (a first packet
+  numbered `.027`, not `.001`). The hub reports the board as silent, because its game never
+  hears from it.
+- **Immortal Barons** keeps the old league's `coord.pub` and `ibnodes.dat`. The client fetches
+  each only when the file is missing, so it never replaces the copied ones.
+
+Copying a folder used to work because the hub's own games were copies too, and every league
+shared one coordinator key. From hub 0.13.0 each new league gets a key of its own, so a
+member's game has to start fresh as well.
+
+**If you have already copied one:** move the copy aside, and make a fresh install in its
+place. Bring over only what you set up for this league (`bbs.cfg`, the nodes file, and your
+BBS's door files), and run RESET as above, minding inbound. Then ask the hub's operator to reset the
+league again, unless a reset sent after the copy was moved aside is already waiting in
+inbound. A copy that is still in place when the reset arrives rejects it again.
+
 ## Packet naming
 
 Packet filenames carry their own routing information:
