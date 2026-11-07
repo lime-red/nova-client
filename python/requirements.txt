@@ -22,7 +22,7 @@ propcache==0.4.1
     # via
     #   aiohttp
     #   yarl
-python-dotenv==1.0.1
+python-dotenv==1.2.4
     # via nova-client
 toml==0.10.2
     # via nova-client
