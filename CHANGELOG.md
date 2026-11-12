@@ -7,6 +7,11 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-11-12
+
+Game runs can be seen from outside the daemon. Works against any hub 0.7.0 did; the
+vendored spec is nova-hub v0.13.1's, unchanged but for its version.
+
 ### Added
 - **Game runs hold `NOVARUN.LCK` in the game folder** (Python, Linux and macOS): an
   exclusive `flock` for the length of each run, so programs outside the daemon can tell the
@@ -16,6 +21,9 @@ Python-only release, which is the code that had been running in production.
   maintenance is running, one moment" and wait, instead of BRE's bare "in use". The lock is
   taken blocking, in a thread: an outside check holds it (shared) for only a moment. A folder
   it can't be created in is logged and the run goes ahead. Windows is unchanged.
+
+### Changed
+- Runtime dependencies: aiohttp 3.14.5 and yarl 1.25.1 (from 3.14.3 and 1.22.0).
 
 ## [0.7.0] — 2026-11-01
 

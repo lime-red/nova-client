@@ -5,6 +5,6 @@ constant in the PowerShell clients. All three feed the User-Agent header so the
 hub's logs identify which implementation a node is running.
 """
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 USER_AGENT = f"nova-client-py/{__version__}"
