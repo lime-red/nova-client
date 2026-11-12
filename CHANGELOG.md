@@ -7,6 +7,16 @@ Python-only release, which is the code that had been running in production.
 
 ## [Unreleased]
 
+### Added
+- **Game runs hold `NOVARUN.LCK` in the game folder** (Python, Linux and macOS): an
+  exclusive `flock` for the length of each run, so programs outside the daemon can tell the
+  game is busy with nova. The per-folder asyncio lock that queues the daemon's own runs is
+  invisible to anything else, and BRE and FE take `INUSE.FLG` for maintenance just as they do
+  for a player, so a BBS couldn't tell the two apart. eqx uses it to tell a caller "turn
+  maintenance is running, one moment" and wait, instead of BRE's bare "in use". The lock is
+  taken blocking, in a thread: an outside check holds it (shared) for only a moment. A folder
+  it can't be created in is logged and the run goes ahead. Windows is unchanged.
+
 ## [0.7.0] — 2026-11-01
 
 Game logs stop piling up. Works against any hub 0.6.0 did; the vendored spec is
