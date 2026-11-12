@@ -167,6 +167,13 @@ The daemon and `client.py` take a lock beside the config (`config.toml.lock`), s
 of them syncs that config at a time. A `client.py` run while the daemon is mid-cycle says so
 and exits 1; the daemon waits for a hand-run `client.py` to finish.
 
+On Linux and macOS each game run also holds an `flock` on `NOVARUN.LCK` in the game folder,
+for as long as the game runs. Nothing in the client depends on it: it is there so a BBS can
+tell that the game is busy with maintenance rather than with a player (eqx tells a caller who
+finds BRE's or FE's `INUSE.FLG` "turn maintenance is running, one moment"). To check it, take a
+shared, non-blocking `flock` on the file and let it go straight away; a check that finds it
+held means a run is under way. The client never removes the file.
+
 ### Configuration Validation
 
 Validate your config before running:

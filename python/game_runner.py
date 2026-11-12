@@ -9,6 +9,7 @@ queuing.
 """
 
 import asyncio
+import contextlib
 import os
 import platform
 import re
@@ -22,6 +23,46 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from client import GAME_LETTERS
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+
+
+# Held (flock, exclusive) in the game folder for the whole of each game run,
+# so other programs on the host can tell the game is busy with nova and not a
+# player: a BBS that finds the game's INUSE.FLG can say "turn maintenance is
+# running, one moment" instead of "in use". The asyncio lock below only
+# serialises this daemon's own runs and is invisible outside it. To check
+# it, try a shared non-blocking flock on the file and let it go at once.
+# An 8.3 name, since the game folder is also a DOS directory.
+RUN_LOCK_NAME = "NOVARUN.LCK"
+
+
+@contextlib.asynccontextmanager
+async def game_folder_lock(game_folder: Path, log: Callable[[str, str], None]):
+    """Hold RUN_LOCK_NAME in game_folder for the duration (POSIX only).
+
+    Blocking, in a thread: an outside check holds the lock (shared) for only
+    a moment, and this must not fail because one happened to be under way.
+    A lock that can't be taken (read-only folder) is logged and the run goes
+    ahead without it: it is information for others, not a guard."""
+    if fcntl is None:
+        yield
+        return
+    path = Path(game_folder) / RUN_LOCK_NAME
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        log("WARNING", f"Could not open {path} ({e.strerror or e}); running without it")
+        yield
+        return
+    try:
+        await asyncio.to_thread(fcntl.flock, fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # releases the lock
 
 
 # cmd.exe (Windows) and COMMAND.COM (the batch file under dosemu) give these
@@ -262,19 +303,20 @@ class GameRunner:
                 self.log("INFO", f"Starting {game_type} {league_id} maintenance: {full_command}")
 
             try:
-                if self.is_windows:
-                    result = await self._run_windows(
-                        game_folder_path, game_command, maintenance_args, timeout
-                    )
-                elif is_native(game_type, league_config):
-                    result = await self._run_native(
-                        game_type, league_id, game_folder_path, game_command,
-                        maintenance_args, timeout,
-                    )
-                else:
-                    result = await self._run_linux_dosemu(
-                        game_type, league_id, league_config, timeout
-                    )
+                async with game_folder_lock(game_folder_path, self.log):
+                    if self.is_windows:
+                        result = await self._run_windows(
+                            game_folder_path, game_command, maintenance_args, timeout
+                        )
+                    elif is_native(game_type, league_config):
+                        result = await self._run_native(
+                            game_type, league_id, game_folder_path, game_command,
+                            maintenance_args, timeout,
+                        )
+                    else:
+                        result = await self._run_linux_dosemu(
+                            game_type, league_id, league_config, timeout
+                        )
 
                 duration = (datetime.now() - start_time).total_seconds()
                 result.duration_seconds = duration
